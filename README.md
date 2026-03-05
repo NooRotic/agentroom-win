@@ -2,7 +2,7 @@
 
 A desktop app that turns your AI coding agents into animated pixel art characters in a virtual office — with full session search, transcript browsing, and real-time activity monitoring across Claude Code, Codex, and Gemini.
 
-![AgentRoom screenshot](docs/screenshots/hero-office.png)
+![AgentRoom screenshot](docs/screenshots/hero-office-tagged.png)
 
 ## Quick Start
 
@@ -31,7 +31,8 @@ npm run tauri dev
 - **Work & idle rooms** — active agents sit at desks in the Work Room; idle agents walk to the Break Room and hang out on couches
 - **Per-project focus** — switch the office view to show only agents working on a specific project
 - **Session search & browsing** — search across all agent sessions with full-text search powered by [CASS](https://github.com/Dicklesworthstone/coding_agent_session_search), grouped by project
-- **Transcript viewer** — click any session to read the full conversation with "Open in iTerm2" to resume
+- **Transcript viewer** — click any session to read the full conversation in-app
+- **Open in Terminal** — one-click "Open in iTerm2" button to jump straight into a session's working directory and resume the agent
 - **Sub-agent visualization** — Task tool sub-agents spawn as separate characters linked to their parent
 - **Speech bubbles** — visual indicators when an agent is waiting for input or needs permission approval
 - **Sound notifications** — chime when an agent finishes its turn
@@ -291,7 +292,24 @@ agentroom-visual/
 
 ## Acknowledgments
 
-- **[CASS](https://github.com/Dicklesworthstone/coding_agent_session_search)** by Jeffrey Emanuel -- unified search over local coding agent histories
+**Search & Indexing:**
+- **[CASS](https://github.com/Dicklesworthstone/coding_agent_session_search)** by Jeffrey Emanuel -- unified search over local coding agent histories, plus the bundled [asupersync](https://github.com/Dicklesworthstone/asupersync), [frankensearch](https://github.com/Dicklesworthstone/frankensearch), [frankentui](https://github.com/Dicklesworthstone/frankentui), [franken_agent_detection](https://github.com/Dicklesworthstone/franken_agent_detection), and [toon_rust](https://github.com/Dicklesworthstone/toon_rust) libraries
+- **[Tantivy](https://github.com/quickwit-oss/tantivy)** -- full-text search engine (BM25 inverted index) powering CASS lexical search
+- **[FastEmbed](https://github.com/Anush008/fastembed-rs)** -- MiniLM-384 embeddings for semantic search
+
+**Desktop & Framework:**
+- **[Tauri](https://tauri.app/)** -- desktop app shell with Rust backend and web frontend
+- **[iTerm2](https://iterm2.com/)** -- "Open in iTerm2" terminal integration via AppleScript
+
+**Agent Integrations:**
+- **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** by Anthropic -- primary agent support
+- **[Codex CLI](https://github.com/openai/codex)** by OpenAI -- Codex agent session support
+- **[Gemini CLI](https://github.com/google-gemini/gemini-cli)** by Google -- Gemini agent session support
+- **[Aider](https://github.com/paul-gauthier/aider)** by Paul Gauthier -- Aider session support
+- **[Cline](https://github.com/cline/cline)** -- VS Code agent extension session support
+- **[CodexBar](https://github.com/steipete/CodexBar)** by Peter Steinberger -- macOS menu bar usage stats for Codex/Claude/Gemini (token panel integration)
+
+**Visual Assets:**
 - **[Pixel Agents](https://github.com/pablodelucca/pixel-agents)** by Pablo de Lucca -- the original pixel art agent visualization (VS Code extension) from which the game engine is ported
 - **[SkyOffice](https://github.com/kevinshen56714/SkyOffice)** by Kevin Shen -- tileset assets (FloorAndGround, Modern_Office, Generic, Basement)
 - **[LimeZu](https://limezu.itch.io/)** -- pixel art assets used in SkyOffice's tilesets

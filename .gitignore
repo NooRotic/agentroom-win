@@ -20,3 +20,4 @@ search-backend/*/target/
 
 # Generated local state
 coverage/
+nanobanana-output/
