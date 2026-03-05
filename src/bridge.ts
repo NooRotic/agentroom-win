@@ -7,7 +7,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 export interface AgentEventPayload {
   agent_id: string
-  status: 'tool_start' | 'tool_done' | 'turn_end' | 'permission' | 'permission_clear' | 'active' | 'waiting' | 'text_idle'
+  status: 'tool_start' | 'tool_done' | 'turn_end' | 'permission' | 'permission_clear' | 'active' | 'waiting' | 'text_idle' | 'discovered'
   tool_name?: string
   tool_id?: string
   tool_status?: string

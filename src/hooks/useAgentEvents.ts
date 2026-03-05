@@ -60,14 +60,6 @@ export function useAgentEvents(
   // Track active tool counts per agent for tool_done logic
   const activeToolCountRef = useRef<Map<number, Set<string>>>(new Map())
 
-  // Initial scan flag: during the first ~2s, all agents are created idle.
-  // Only real-time events after the initial scan activate agents.
-  const initializingRef = useRef(true)
-  useEffect(() => {
-    const timer = setTimeout(() => { initializingRef.current = false }, 2000)
-    return () => clearTimeout(timer)
-  }, [])
-
   /** Reverse lookup: numeric ID → original agent_id string */
   const getAgentStringId = useCallback((numId: number): string | null => {
     for (const [strId, nId] of agentIdMap) {
@@ -109,6 +101,8 @@ export function useAgentEvents(
   const ensureAgent = useCallback((numId: number, agentType?: string) => {
     const os = getOfficeState()
     if (!os.characters.has(numId)) {
+      // Cap at 25 agents total
+      if (os.characters.size >= 25) return
       os.addAgent(numId, undefined, undefined, undefined, undefined, undefined, agentType)
       setAgents((prev) => prev.includes(numId) ? prev : [...prev, numId])
     }
@@ -125,14 +119,16 @@ export function useAgentEvents(
       }
       const agentType = agentTypeMap.get(event.agent_id)
 
-      // During initial scan (~first 2s), only create agents as idle.
-      // Skip activation, sounds, and bubbles — treat all sessions as idle.
-      if (initializingRef.current) {
-        ensureAgent(numId, agentType)
-        return
-      }
-
       switch (event.status) {
+        // Initial scan: Rust backend emits "discovered" once per agent after
+        // scanning all JSONL history. Creates agent as idle — no activation.
+        case 'discovered': {
+          // Cap at 25 agents — skip if we already have too many
+          if (os.characters.size >= 25) return
+          ensureAgent(numId, agentType)
+          return
+        }
+
         case 'tool_start': {
           ensureAgent(numId, agentType)
           const toolId = event.tool_id || ''

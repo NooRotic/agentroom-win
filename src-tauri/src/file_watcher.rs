@@ -315,8 +315,17 @@ pub fn start_watching(
         *guard = Some(Arc::clone(&cancel));
     }
 
-    // Initial scan to pick up existing JSONL files
+    // Initial scan: suppress event emissions, then emit "discovered" per agent
+    {
+        let mut state = shared.lock().unwrap();
+        state.state_manager.suppress_emit = true;
+    }
     scan_and_process(&watch_dir, &shared);
+    {
+        let mut state = shared.lock().unwrap();
+        state.state_manager.suppress_emit = false;
+        state.state_manager.emit_all_discovered();
+    }
 
     // Start filesystem watcher
     let shared_notify = Arc::clone(&shared);

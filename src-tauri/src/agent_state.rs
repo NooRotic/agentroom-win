@@ -84,6 +84,8 @@ impl AgentState {
 pub struct AgentStateManager {
     pub agents: HashMap<String, AgentState>,
     app_handle: AppHandle,
+    /// When true, suppress event emissions (used during initial file scan).
+    pub suppress_emit: bool,
 }
 
 impl AgentStateManager {
@@ -91,6 +93,7 @@ impl AgentStateManager {
         Self {
             agents: HashMap::new(),
             app_handle,
+            suppress_emit: false,
         }
     }
 
@@ -111,11 +114,31 @@ impl AgentStateManager {
     }
 
     /// Emit an event to the frontend, injecting agent_type from stored state.
+    /// Suppressed during initial scan — only "discovered" events are emitted after scan.
     fn emit(&self, agent_id: &str, mut payload: AgentStatePayload) {
+        if self.suppress_emit {
+            return;
+        }
         if let Some(agent) = self.agents.get(agent_id) {
             payload.agent_type = agent.agent_type.clone();
         }
         let _ = self.app_handle.emit("agent-state-changed", &payload);
+    }
+
+    /// Emit a "discovered" event for each known agent (called after initial scan).
+    pub fn emit_all_discovered(&self) {
+        for (agent_id, agent) in &self.agents {
+            let _ = self.app_handle.emit("agent-state-changed", &AgentStatePayload {
+                agent_id: agent_id.clone(),
+                status: "discovered".to_string(),
+                tool_name: None,
+                tool_id: None,
+                tool_status: None,
+                is_subagent: None,
+                parent_tool_id: None,
+                agent_type: agent.agent_type.clone(),
+            });
+        }
     }
 
     /// Process a batch of AgentEvents from parsing a JSONL line.
