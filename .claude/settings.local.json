@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(echo \"HOME=$HOME\")",
+      "Read(//c/Dev/apps/agentRoom/agentroom/$HOME/Projects/AgentRoom/cass/target/**)",
+      "Bash(echo:*)",
+      "Bash(C:/Dev/apps/agentRoom/agentroom/search-backend/cass/target/release/cass --version 2>&1)",
+      "Bash(cargo:*)",
+      "Bash(cmd.exe /c \"cargo --version\" 2>&1 && cmd.exe /c \"rustc --version\" 2>&1)",
+      "Bash(/c/Users/NooRo/.cargo/bin/cargo.exe --version 2>&1 || ls /C/Users/NooRo/.cargo/ 2>&1 | head -5)",
+      "Bash(grep:*)",
+      "Bash(ls:*)",
+      "Bash(cd:*)"
+    ]
+  }
+}

@@ -1,0 +1,735 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Quality (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+
+      - name: Prepare path dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          deps_dir="$(cd "$GITHUB_WORKSPACE/.." && pwd)"
+          asupersync_ref="15e6b6920fa0ad3e6d843ea55186eed754389ad2"
+          frankensqlite_ref="5c99eeb93d789c1309d5c46a540289369ff39535"
+          fast_cmaes_ref="17f633e2c24bdd0c358310949066e5922b9e17b5"
+
+          clone_or_update() {
+            local repo_url="$1"
+            local dest_path="$2"
+            local ref="$3"
+            if [[ -d "${dest_path}/.git" ]]; then
+              git -C "${dest_path}" fetch --depth 1 origin "${ref}"
+            else
+              git clone --no-checkout "${repo_url}" "${dest_path}"
+              git -C "${dest_path}" fetch --depth 1 origin "${ref}"
+            fi
+            git -C "${dest_path}" checkout --detach FETCH_HEAD
+          }
+
+          # Clone as siblings of the checkout (../asupersync relative path),
+          # pinned to explicit commits for reproducible CI.
+          clone_or_update "https://github.com/Dicklesworthstone/asupersync.git" "${deps_dir}/asupersync" "${asupersync_ref}"
+          clone_or_update "https://github.com/Dicklesworthstone/frankensqlite.git" "${deps_dir}/frankensqlite" "${frankensqlite_ref}"
+          clone_or_update "https://github.com/Dicklesworthstone/fast_cmaes.git" "${deps_dir}/fast_cmaes" "${fast_cmaes_ref}"
+
+          # Cargo.toml files reference /data/projects/<dep> (local dev path).
+          # Rewrite those absolute paths to point at the sibling clones for CI.
+          find "$GITHUB_WORKSPACE" -name Cargo.toml -exec \
+            sed -i.bak -e "s|/data/projects/|${deps_dir}/|g" {} +
+          find "$GITHUB_WORKSPACE" -name '*.bak' -delete
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace-${{ matrix.os }}-nightly
+          cache-targets: true
+
+      - name: Resolve validation profile
+        id: validation_profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          profile="premerge"
+          if [[ "${GITHUB_EVENT_NAME}" == "schedule" ]]; then
+            profile="nightly"
+          fi
+          echo "profile=${profile}" >> "${GITHUB_OUTPUT}"
+          echo "validation_profile=${profile}" >> "${GITHUB_ENV}"
+
+      - name: cargo check
+        run: cargo check --workspace --all-targets
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      - name: cargo test
+        run: cargo test --workspace
+
+      - name: Nightly full validation (all features)
+        if: matrix.os == 'ubuntu-latest' && steps.validation_profile.outputs.profile == 'nightly'
+        run: cargo test --workspace --all-features -- --nocapture
+
+      - name: E2E contract smoke (fsfs)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo test -p frankensearch-fsfs --test cli_e2e_contract -- --nocapture
+
+      - name: Telemetry adapter dry-run lane smoke
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf test_logs/telemetry_adapters
+          mkdir -p test_logs/telemetry_adapters
+
+          declare -a lanes=(
+            "cass scripts/e2e/telemetry_adapter_cass.sh"
+            "xf scripts/e2e/telemetry_adapter_xf.sh"
+            "mcp_agent_mail_rust scripts/e2e/telemetry_adapter_agent_mail.sh"
+          )
+
+          for lane in "${lanes[@]}"; do
+            host="${lane%% *}"
+            script="${lane#* }"
+
+            bash "${script}" --mode all --dry-run
+
+            run_dir="$(ls -1dt "test_logs/telemetry_adapters/${host}-all-"* 2>/dev/null | head -n1 || true)"
+            if [[ -z "${run_dir}" ]]; then
+              echo "Missing telemetry adapter run directory for host=${host}" >&2
+              exit 1
+            fi
+
+            for artifact in manifest.json summary.json summary.md structured_events.jsonl replay_command.txt terminal_transcript.txt; do
+              if [[ ! -f "${run_dir}/${artifact}" ]]; then
+                echo "Missing artifact ${artifact} for host=${host} run=${run_dir}" >&2
+                exit 1
+              fi
+            done
+
+            jq -e \
+              --arg host "${host}" \
+              '.schema == "telemetry-adapter-e2e-manifest-v1" and .v == 1 and .host == $host and .execution_mode == "dry" and .status == "ok"' \
+              "${run_dir}/manifest.json" >/dev/null
+
+            jq -e \
+              --arg host "${host}" \
+              '.host == $host and .execution_mode == "dry" and .status == "ok" and (.reason_code | length > 0)' \
+              "${run_dir}/summary.json" >/dev/null
+
+            jq -s -e '
+              length >= 2 and
+              all(.[]; .schema == "telemetry-adapter-e2e-event-v1") and
+              any(.[]; .body.stage == "session.init" and .body.status == "ok") and
+              any(.[]; .body.stage == "session.finalize" and .body.status == "ok")
+            ' "${run_dir}/structured_events.jsonl" >/dev/null
+          done
+
+      - name: Install JSON schema validator
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user --upgrade jsonschema
+
+      - name: Validate unified e2e artifact schema fixtures
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for fixture in schemas/fixtures/e2e-*.json; do
+            python3 -m jsonschema --instance "${fixture}" schemas/e2e-artifact-v1.schema.json
+          done
+
+          for fixture in schemas/fixtures-invalid/e2e-*.json; do
+            if python3 -m jsonschema --instance "${fixture}" schemas/e2e-artifact-v1.schema.json; then
+              echo "unexpected schema pass: ${fixture}" >&2
+              exit 1
+            fi
+          done
+
+      - name: Emit machine-queryable e2e artifact index
+        if: always() && matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ci_artifacts
+
+          cat > ci_artifacts/e2e_artifact_index.ndjson <<'EOF'
+          {"suite":"core","schema":"e2e-manifest-v1","status":"adopted","source":"crates/frankensearch-core/src/e2e_artifact.rs","required_failure_artifacts":["artifacts_index.json","replay_command.txt"],"requires_terminal_transcript_on_failure":false}
+          {"suite":"fsfs","schema":"e2e-manifest-v1","status":"in_progress","source":"crates/frankensearch-fsfs/src/cli_e2e.rs","required_failure_artifacts":["artifacts_index.json","replay_command.txt"],"requires_terminal_transcript_on_failure":false}
+          {"suite":"ops","schema":"e2e-manifest-v1","status":"pending","source":"crates/frankensearch-ops","required_failure_artifacts":["artifacts_index.json","replay_command.txt","terminal_transcript.txt"],"requires_terminal_transcript_on_failure":true}
+          EOF
+
+          cat > ci_artifacts/e2e_retention_policy.json <<'EOF'
+          {
+            "schema": "e2e-artifact-retention-policy-v1",
+            "index_file": "e2e_artifact_index.ndjson",
+            "success_retention_days": 7,
+            "failure_retention_days": 30
+          }
+          EOF
+
+      - name: Emit quality gate matrix + rollout checklist artifacts
+        if: always() && matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ci_artifacts
+
+          cat > ci_artifacts/quality_gate_matrix.json <<EOF
+          {
+            "schema": "quality-gate-matrix-v1",
+            "validation_profile": "${validation_profile}",
+            "suites": [
+              {"id":"unit","required":true,"lane":"cargo test --workspace"},
+              {"id":"integration","required":true,"lane":"cargo test --workspace"},
+              {"id":"snapshot","required":true,"status":"pending","bead":"bd-2yu.8.3"},
+              {"id":"e2e","required":true,"lane":"cargo test -p frankensearch-fsfs --test cli_e2e_contract -- --nocapture"},
+              {"id":"telemetry_adapter_dry_run","required":true,"lane":"scripts/e2e/telemetry_adapter_{cass,xf,agent_mail}.sh --mode all --dry-run"},
+              {"id":"perf","required":true,"status":"pending","bead":"bd-2yu.8.4"},
+              {"id":"fault","required":true,"status":"pending","bead":"bd-2yu.8.4"},
+              {"id":"soak","required":true,"status":"pending","bead":"bd-2yu.8.5"},
+              {"id":"contract_schema","required":true,"lane":"python3 -m jsonschema --instance schemas/fixtures/e2e-*.json schemas/e2e-artifact-v1.schema.json"}
+            ],
+            "profiles": {
+              "premerge": {
+                "description": "Fast gate for PR/push",
+                "required_lanes": ["cargo check","cargo clippy","cargo fmt --check","cargo test --workspace","fsfs_cli_e2e_contract","telemetry_adapter_dry_run","schema_validation"]
+              },
+              "nightly": {
+                "description": "Full validation sweep",
+                "required_lanes": ["premerge","cargo test --workspace --all-features -- --nocapture"]
+              }
+            }
+          }
+          EOF
+
+          cat > ci_artifacts/rollout_host_checklist.json <<'EOF'
+          {
+            "schema": "host-rollout-checklist-v1",
+            "hosts": [
+              "coding_agent_session_search",
+              "xf",
+              "mcp_agent_mail_rust",
+              "frankenterm"
+            ],
+            "phases": ["shadow","canary","default"],
+            "post_rollout_health_checks": [
+              "slo_error_budget_within_threshold",
+              "latency_budget_within_threshold",
+              "degraded_reason_code_rate_within_threshold",
+              "deterministic_replay_passed"
+            ],
+            "rollback_triggers": [
+              "fatal_incident_open",
+              "contract_breaking_output_regression",
+              "persistent_latency_or_error_budget_breach",
+              "replay_reproducible_failure_unresolved"
+            ]
+          }
+          EOF
+
+      - name: Emit statistical perf gate policy + provisional result artifacts
+        if: always() && matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ci_artifacts
+
+          cat > ci_artifacts/perf_regression_gate_policy.json <<'EOF'
+          {
+            "schema": "perf-regression-gate-policy-v1",
+            "thresholds_pct": {
+              "p50": 5,
+              "p95": 8,
+              "p99": 12,
+              "memory_peak_mb": 10
+            },
+            "confidence_target_pct": 95,
+            "min_run_count": 5,
+            "max_flake_reruns": 2,
+            "reason_codes": [
+              "perf.gate.pass",
+              "perf.gate.missing_inputs",
+              "perf.gate.inconclusive_confidence",
+              "perf.gate.flake_suspected",
+              "perf.gate.regression_detected"
+            ]
+          }
+          EOF
+
+          baseline_file="ci_artifacts/perf_metrics_baseline.json"
+          current_file="ci_artifacts/perf_metrics_current.json"
+          if [[ -f "${baseline_file}" && -f "${current_file}" ]]; then
+            cat > ci_artifacts/perf_regression_gate_result.json <<'EOF'
+          {
+            "schema": "perf-regression-gate-result-v1",
+            "status": "pending_evaluation_logic",
+            "reason_code": "perf.gate.inconclusive_confidence",
+            "details": "baseline/current artifacts present but evaluation lane not yet fully wired in this workflow",
+            "replay_command": "cargo test --workspace --all-features -- --nocapture"
+          }
+          EOF
+          else
+            cat > ci_artifacts/perf_regression_gate_result.json <<'EOF'
+          {
+            "schema": "perf-regression-gate-result-v1",
+            "status": "pending_inputs",
+            "reason_code": "perf.gate.missing_inputs",
+            "details": "benchmark metric artifacts not yet present in ci_artifacts/",
+            "replay_command": "cargo test --workspace --all-features -- --nocapture"
+          }
+          EOF
+          fi
+
+      - name: Validate CI artifact payloads
+        if: always() && matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e -s '
+            length == 3 and
+            (map(.suite) | sort == ["core","fsfs","ops"]) and
+            all(.[]; .schema == "e2e-manifest-v1") and
+            all(.[]; (.required_failure_artifacts | index("artifacts_index.json")) != null) and
+            all(.[]; (.required_failure_artifacts | index("replay_command.txt")) != null)
+          ' ci_artifacts/e2e_artifact_index.ndjson >/dev/null
+
+          jq -e '
+            .schema == "e2e-artifact-retention-policy-v1" and
+            .index_file == "e2e_artifact_index.ndjson" and
+            .success_retention_days >= 1 and
+            .failure_retention_days >= .success_retention_days
+          ' ci_artifacts/e2e_retention_policy.json >/dev/null
+
+          jq -e '
+            .schema == "quality-gate-matrix-v1" and
+            (.validation_profile == "premerge" or .validation_profile == "nightly") and
+            (.suites | length >= 8)
+          ' ci_artifacts/quality_gate_matrix.json >/dev/null
+
+          jq -e '
+            .schema == "host-rollout-checklist-v1" and
+            (.hosts | length == 4) and
+            (.phases == ["shadow","canary","default"]) and
+            (.post_rollout_health_checks | length >= 4) and
+            (.rollback_triggers | length >= 4)
+          ' ci_artifacts/rollout_host_checklist.json >/dev/null
+
+          jq -e '
+            .schema == "perf-regression-gate-policy-v1" and
+            (.thresholds_pct.p50 >= 1) and
+            (.thresholds_pct.p99 >= .thresholds_pct.p95) and
+            (.confidence_target_pct >= 50) and
+            (.min_run_count >= 3) and
+            (.reason_codes | length >= 5)
+          ' ci_artifacts/perf_regression_gate_policy.json >/dev/null
+
+          jq -e '
+            .schema == "perf-regression-gate-result-v1" and
+            (.reason_code | startswith("perf.gate.")) and
+            (.replay_command | length > 0)
+          ' ci_artifacts/perf_regression_gate_result.json >/dev/null
+
+      - name: Upload e2e artifact index (success retention)
+        if: matrix.os == 'ubuntu-latest' && success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-contract-index-success-${{ github.run_id }}
+          path: ci_artifacts/*
+          retention-days: 7
+
+      - name: Upload e2e artifact index (failure retention)
+        if: matrix.os == 'ubuntu-latest' && failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-contract-index-failure-${{ github.run_id }}
+          path: ci_artifacts/*
+          retention-days: 30
+
+      - name: Upload telemetry adapter dry-run artifacts
+        if: always() && matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: telemetry-adapter-dry-run-${{ github.run_id }}
+          path: test_logs/telemetry_adapters/*
+          retention-days: 14
+
+      - name: Publish replay/triage runbook links on failure
+        if: failure() && matrix.os == 'ubuntu-latest'
+        shell: bash
+        env:
+          RUNBOOK_URL: https://github.com/${{ github.repository }}/blob/${{ github.sha }}/docs/e2e-artifact-contract.md#replay-and-triage-playbook
+          OPS_URL: https://github.com/${{ github.repository }}/blob/${{ github.sha }}/docs/ops-tui-ia.md#e2e-failure-triage-playbook-link
+        run: |
+          set -euo pipefail
+          echo "::notice title=Replay/Triage Playbook::${RUNBOOK_URL}"
+          {
+            echo "### Failure replay and triage"
+            echo ""
+            echo "- Unified v1 bundle playbook: [Replay and Triage Playbook](${RUNBOOK_URL})"
+            echo "- Operator docs entrypoint: [Ops TUI IA playbook link](${OPS_URL})"
+            echo "- Replay source of truth: \`replay_command.txt\` from the failing artifact bundle."
+            echo "- Machine index artifact: \`e2e-contract-index-failure-${{ github.run_id }}\` (retention: 30 days)."
+            echo "- Telemetry adapter lane logs: \`telemetry-adapter-dry-run-${{ github.run_id }}\` (retention: 14 days)."
+            echo "- Quality gate metadata artifacts: \`quality_gate_matrix.json\`, \`rollout_host_checklist.json\`."
+            echo "- Perf gate artifacts: \`perf_regression_gate_policy.json\`, \`perf_regression_gate_result.json\`."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  release-build:
+    name: Release build (${{ matrix.target }})
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: quality
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            build_tool: zigbuild
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            build_tool: zigbuild
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            build_tool: cargo
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            build_tool: cargo
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            build_tool: cargo
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+
+      - name: Prepare path dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          deps_dir="$(cd "$GITHUB_WORKSPACE/.." && pwd)"
+          asupersync_ref="15e6b6920fa0ad3e6d843ea55186eed754389ad2"
+          frankensqlite_ref="5c99eeb93d789c1309d5c46a540289369ff39535"
+          fast_cmaes_ref="17f633e2c24bdd0c358310949066e5922b9e17b5"
+
+          clone_or_update() {
+            local repo_url="$1"
+            local dest_path="$2"
+            local ref="$3"
+            if [[ -d "${dest_path}/.git" ]]; then
+              git -C "${dest_path}" fetch --depth 1 origin "${ref}"
+            else
+              git clone --no-checkout "${repo_url}" "${dest_path}"
+              git -C "${dest_path}" fetch --depth 1 origin "${ref}"
+            fi
+            git -C "${dest_path}" checkout --detach FETCH_HEAD
+          }
+
+          clone_or_update "https://github.com/Dicklesworthstone/asupersync.git" "${deps_dir}/asupersync" "${asupersync_ref}"
+          clone_or_update "https://github.com/Dicklesworthstone/frankensqlite.git" "${deps_dir}/frankensqlite" "${frankensqlite_ref}"
+          clone_or_update "https://github.com/Dicklesworthstone/fast_cmaes.git" "${deps_dir}/fast_cmaes" "${fast_cmaes_ref}"
+
+          find "$GITHUB_WORKSPACE" -name Cargo.toml -exec \
+            sed -i.bak -e "s|/data/projects/|${deps_dir}/|g" {} +
+          find "$GITHUB_WORKSPACE" -name '*.bak' -delete
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.target }}-nightly
+          cache-targets: true
+
+      - name: Setup Zig (Linux cross-musl builds)
+        if: matrix.build_tool == 'zigbuild'
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.12.0
+
+      - name: Install cargo-zigbuild (Linux cross-musl builds)
+        if: matrix.build_tool == 'zigbuild'
+        run: cargo install cargo-zigbuild --locked
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build fsfs release binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          if [[ "${{ matrix.build_tool }}" == "zigbuild" ]]; then
+            cargo zigbuild -p frankensearch-fsfs --release --target "${target}"
+          else
+            cargo build -p frankensearch-fsfs --release --target "${target}"
+          fi
+
+      - name: Package archive + checksum
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          TARGET_TRIPLE: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          binary_name="fsfs"
+          archive_extension="tar.xz"
+          if [[ "${TARGET_TRIPLE}" == *"windows"* ]]; then
+            binary_name="fsfs.exe"
+            archive_extension="zip"
+          fi
+
+          binary_path="target/${TARGET_TRIPLE}/release/${binary_name}"
+          if [[ ! -f "${binary_path}" ]]; then
+            echo "Expected binary not found: ${binary_path}" >&2
+            exit 1
+          fi
+
+          if command -v llvm-strip >/dev/null 2>&1; then
+            llvm-strip "${binary_path}" || true
+          elif command -v strip >/dev/null 2>&1; then
+            strip "${binary_path}" || true
+          fi
+
+          archive_base="fsfs-${TAG_NAME}-${TARGET_TRIPLE}"
+          mkdir -p dist
+          cp "${binary_path}" "dist/${binary_name}"
+          if [[ "${archive_extension}" == "zip" ]]; then
+            if command -v zip >/dev/null 2>&1; then
+              (cd dist && zip -q "${archive_base}.zip" "${binary_name}")
+            elif command -v powershell.exe >/dev/null 2>&1; then
+              powershell.exe -NoLogo -NoProfile -Command \
+                "Compress-Archive -Path 'dist/${binary_name}' -DestinationPath 'dist/${archive_base}.zip' -Force"
+            elif command -v pwsh >/dev/null 2>&1; then
+              pwsh -NoLogo -NoProfile -Command \
+                "Compress-Archive -Path 'dist/${binary_name}' -DestinationPath 'dist/${archive_base}.zip' -Force"
+            else
+              echo "Neither zip nor PowerShell compression tooling is available." >&2
+              exit 1
+            fi
+          else
+            tar -C dist -cJf "dist/${archive_base}.tar.xz" "${binary_name}"
+          fi
+          archive_path="dist/${archive_base}.${archive_extension}"
+          installer_archive_path="dist/fsfs-${TARGET_TRIPLE}.${archive_extension}"
+          cp "${archive_path}" "${installer_archive_path}"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${archive_path}" > "${archive_path}.sha256"
+            sha256sum "${installer_archive_path}" > "${installer_archive_path}.sha256"
+          else
+            shasum -a 256 "${archive_path}" > "${archive_path}.sha256"
+            shasum -a 256 "${installer_archive_path}" > "${installer_archive_path}.sha256"
+          fi
+
+          build_timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          rustc_version="$(rustc -V)"
+          cat > "dist/${archive_base}.metadata.json" <<EOF
+          {
+            "tag": "${TAG_NAME}",
+            "target": "${TARGET_TRIPLE}",
+            "binary": "${binary_name}",
+            "build_timestamp_utc": "${build_timestamp}",
+            "rustc": "${rustc_version}"
+          }
+          EOF
+          rm -f "dist/${binary_name}"
+
+      - name: Install cosign (optional signing)
+        uses: sigstore/cosign-installer@v3.8.1
+
+      - name: Sign release archive (optional)
+        shell: bash
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          for archive in dist/*.tar.xz dist/*.zip; do
+            [[ -f "${archive}" ]] || continue
+            cosign sign-blob --yes \
+              --output-signature "${archive}.sig" \
+              --output-certificate "${archive}.pem" \
+              "${archive}" || true
+          done
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/*
+
+  release-publish:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: release-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/*
+
+  publish-crates:
+    name: Publish crates.io packages
+    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') && vars.ENABLE_CRATES_PUBLISH == 'true' && github.repository_owner == 'Dicklesworthstone'
+    needs: release-publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+
+      - name: Prepare path dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          deps_dir="$(cd "$GITHUB_WORKSPACE/.." && pwd)"
+          asupersync_ref="15e6b6920fa0ad3e6d843ea55186eed754389ad2"
+          frankensqlite_ref="5c99eeb93d789c1309d5c46a540289369ff39535"
+          fast_cmaes_ref="17f633e2c24bdd0c358310949066e5922b9e17b5"
+
+          clone_or_update() {
+            local repo_url="$1"
+            local dest_path="$2"
+            local ref="$3"
+            if [[ -d "${dest_path}/.git" ]]; then
+              git -C "${dest_path}" fetch --depth 1 origin "${ref}"
+            else
+              git clone --no-checkout "${repo_url}" "${dest_path}"
+              git -C "${dest_path}" fetch --depth 1 origin "${ref}"
+            fi
+            git -C "${dest_path}" checkout --detach FETCH_HEAD
+          }
+
+          clone_or_update "https://github.com/Dicklesworthstone/asupersync.git" "${deps_dir}/asupersync" "${asupersync_ref}"
+          clone_or_update "https://github.com/Dicklesworthstone/frankensqlite.git" "${deps_dir}/frankensqlite" "${frankensqlite_ref}"
+          clone_or_update "https://github.com/Dicklesworthstone/fast_cmaes.git" "${deps_dir}/fast_cmaes" "${fast_cmaes_ref}"
+
+          find "$GITHUB_WORKSPACE" -name Cargo.toml -exec \
+            sed -i.bak -e "s|/data/projects/|${deps_dir}/|g" {} +
+          find "$GITHUB_WORKSPACE" -name '*.bak' -delete
+
+      - name: Resolve publish sequence + validate tag/version alignment
+        id: publish_plan
+        shell: bash
+        env:
+          CRATES_PUBLISH_SEQUENCE: ${{ vars.CRATES_PUBLISH_SEQUENCE }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${CRATES_PUBLISH_SEQUENCE:-}" ]]; then
+            echo "Repository variable CRATES_PUBLISH_SEQUENCE must be set when ENABLE_CRATES_PUBLISH=true." >&2
+            echo "Example: frankensearch-core" >&2
+            echo "Use dependency order and include only crates whose dependencies are already available on crates.io." >&2
+            exit 1
+          fi
+
+          version="${TAG_NAME#v}"
+          if [[ "${version}" == "${TAG_NAME}" ]]; then
+            echo "Tag '${TAG_NAME}' must use the v<semver> format." >&2
+            exit 1
+          fi
+
+          cargo metadata --no-deps --format-version 1 > /tmp/cargo-metadata.json
+          for crate in ${CRATES_PUBLISH_SEQUENCE}; do
+            crate_version="$(jq -r --arg crate "${crate}" '.packages[] | select(.name == $crate) | .version' /tmp/cargo-metadata.json)"
+            if [[ -z "${crate_version}" || "${crate_version}" == "null" ]]; then
+              echo "Crate '${crate}' not found in workspace metadata." >&2
+              exit 1
+            fi
+            if [[ "${crate_version}" != "${version}" ]]; then
+              echo "Version mismatch for '${crate}': crate=${crate_version}, tag=${version}" >&2
+              exit 1
+            fi
+          done
+
+          echo "sequence=${CRATES_PUBLISH_SEQUENCE}" >> "${GITHUB_OUTPUT}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Publish crates in dependency order
+        shell: bash
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          RELEASE_VERSION: ${{ steps.publish_plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${CARGO_REGISTRY_TOKEN:-}" ]]; then
+            echo "CARGO_REGISTRY_TOKEN is required when ENABLE_CRATES_PUBLISH=true" >&2
+            exit 1
+          fi
+          for crate in ${{ steps.publish_plan.outputs.sequence }}; do
+            for attempt in 1 2 3 4 5; do
+              if cargo publish -p "${crate}" --locked --dry-run; then
+                break
+              fi
+              if [[ "${attempt}" -eq 5 ]]; then
+                echo "Dry-run publish checks failed for ${crate} after ${attempt} attempts." >&2
+                exit 1
+              fi
+              sleep 20
+            done
+            echo "Publishing ${crate} (${RELEASE_VERSION})"
+            cargo publish -p "${crate}" --locked --token "${CARGO_REGISTRY_TOKEN}"
+            sleep 30
+          done

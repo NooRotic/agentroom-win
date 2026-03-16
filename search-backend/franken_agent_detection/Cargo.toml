@@ -1,0 +1,67 @@
+[package]
+name = "franken-agent-detection"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+description = "Local coding-agent installation detection via filesystem probes"
+repository = "https://github.com/Dicklesworthstone/franken_agent_detection"
+documentation = "https://docs.rs/franken-agent-detection"
+readme = "README.md"
+keywords = ["agent", "detection", "filesystem", "codex", "claude"]
+categories = ["development-tools", "command-line-utilities"]
+
+[dependencies]
+# --- Always-on (detection + connector shared) ---
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6"
+
+# --- Optional: connector infrastructure ---
+anyhow = { version = "*", optional = true }
+serde_json = { version = "*", optional = true }
+walkdir = { version = "*", optional = true }
+tracing = { version = "*", optional = true }
+dotenvy = { version = "*", optional = true }
+bloomfilter = { version = "*", optional = true }
+once_cell = { version = "*", optional = true }
+
+# --- Optional: ChatGPT encrypted conversations ---
+aes-gcm = { version = "*", optional = true }
+base64 = { version = "*", optional = true }
+
+# --- Optional: Cursor/OpenCode SQLite session databases ---
+rusqlite = { version = "*", optional = true, features = ["bundled", "modern_sqlite"] }
+
+[features]
+default = []
+# Base connector support: shared deps for all 15 connectors
+connectors = [
+    "dep:anyhow",
+    "dep:serde_json",
+    "dep:walkdir",
+    "dep:tracing",
+    "dep:dotenvy",
+    "dep:bloomfilter",
+    "dep:once_cell",
+]
+# ChatGPT: AES-256-GCM decryption for v2/v3 encrypted conversations
+chatgpt = ["connectors", "dep:aes-gcm", "dep:base64"]
+# Cursor: SQLite database access for state.vscdb
+cursor = ["connectors", "dep:rusqlite"]
+# All connectors enabled
+all-connectors = ["connectors", "chatgpt", "cursor"]
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"

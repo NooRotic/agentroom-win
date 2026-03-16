@@ -33,10 +33,33 @@ struct ModelTagResponse {
 }
 
 fn cass_bin() -> String {
-    env::var("CASS_BIN").unwrap_or_else(|_| {
-        let home = env::var("HOME").unwrap_or_default();
-        format!("{}/Projects/AgentRoom/cass/target/release/cass", home)
-    })
+    if let Ok(bin) = env::var("CASS_BIN") {
+        return bin;
+    }
+
+    // Compile-time default: path to CASS binary in the submodule,
+    // resolved at build time relative to CARGO_MANIFEST_DIR (src-tauri/).
+    if let Some(built_in) = option_env!("AGENTROOM_CASS_BIN_DEFAULT") {
+        if Path::new(built_in).exists() {
+            return built_in.to_string();
+        }
+    }
+
+    // Legacy fallback: pre-submodule path under ~/Projects/AgentRoom/
+    // On Windows, HOME is often unset — fall back to USERPROFILE.
+    let home = env::var("HOME")
+        .or_else(|_| env::var("USERPROFILE"))
+        .unwrap_or_default();
+
+    #[cfg(windows)]
+    let exe_suffix = ".exe";
+    #[cfg(not(windows))]
+    let exe_suffix = "";
+
+    format!(
+        "{}/Projects/AgentRoom/cass/target/release/cass{}",
+        home, exe_suffix
+    )
 }
 
 fn now_millis() -> u64 {

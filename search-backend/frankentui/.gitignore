@@ -1,0 +1,124 @@
+# bv (beads viewer) local config and caches
+.bv/
+
+# Reference libraries cloned for development (synced via scripts/pull_latest_reference_library_repos.sh)
+/legacy_reference_library_code/
+
+# Rust build artifacts
+target/
+target-*/
+target_*/
+Cargo.lock
+fuzz/target/
+fuzz/artifacts/
+
+# Proptest regression files (generated)
+**/proptest-regressions/
+fuzz/corpus/
+
+# Build artifacts
+a.out
+
+# Profiling data (llvm-profdata)
+*.profraw
+
+# perf profiling data
+perf.data
+perf.data.*
+perf_*.data
+
+# NFS temporary files
+.nfs*
+
+# macOS resource fork files
+._*
+
+# Flamegraph output
+flamegraph*.svg
+
+# Test checksums and baselines (ephemeral, machine-dependent)
+golden_checksums.txt
+baseline_results.json
+
+# Local scratch DBs
+storage.sqlite3
+storage.sqlite3-*
+
+# Local scratch dirs (agent/temp)
+.scratch/
+.tmp*/
+
+# One-off scratch scripts (keep local, never commit)
+crates/ftui-extras/src/seq_*.py
+
+# Local agent scratch
+.plan
+
+# MCP Agent Mail local archive
+.mail_repo/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Compiler crash reports
+rustc-ice-*.txt
+
+# Beads history snapshots (JSONL export is tracked, history is local)
+.beads/.br_history/
+
+# Ephemeral debug/test output files (agent artifacts)
+row_skip_dy*
+--graph-format.svg
+
+# Puppeteer/Chrome screenshots (agent artifacts)
+Chrome_*.png
+
+# Font setup scratch scripts (agent artifacts)
+optimize_fonts.py
+setup_fonts.sh
+
+# Local web deploy output (agent artifacts)
+dist/
+saga_of_frankenterm_js.md
+SESSION_REPORT.md
+
+# macOS metadata
+.DS_Store
+
+# Determinism test output (ephemeral, machine-dependent)
+determinism_lab_report.jsonl
+
+# Ephemeral files (agent-generated, build artifacts, test detritus)
+ci-artifacts/
+test_meminfo
+
+# Agent session ephemeral files
+SESSION_TODO.md
+SESSION_*.md
+verify_*.sh
+newfile.txt
+repro_*.rs
+
+# Nested crate build artifacts
+crates/*/target/
+
+# Local scratch DBs
+storage.sqlite3
+storage.sqlite3-*
+
+# FastEmbed model caches
+.fastembed_cache/
+
+# Agent coordination config
+.agent-mail.yaml
+
+# Claude local settings
+.claude/settings.local.json
+.env
+
+# MCP config files (may contain tokens)
+*.mcp.json
+
+# Analysis docs with PII
+ANALYSIS_OF_SPEC_DOC_DIFFS.md

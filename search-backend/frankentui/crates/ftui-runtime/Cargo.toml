@@ -1,0 +1,91 @@
+[package]
+name = "ftui-runtime"
+version = "0.2.1"
+edition = "2024"
+license-file = "../../LICENSE"
+description = "Elm-style runtime loop and subscriptions for FrankenTUI."
+repository = "https://github.com/Dicklesworthstone/frankentui"
+homepage = "https://github.com/Dicklesworthstone/frankentui"
+documentation = "https://docs.rs/ftui-runtime"
+readme = "../../README.md"
+
+[features]
+default = []
+# Enable dedicated render/output thread (Mode B).
+# When enabled, all terminal output is serialized on a background thread,
+# preventing interleaving between logs and UI presents.
+render-thread = []
+# Best-effort stdio capture to prevent accidental println! from corrupting
+# inline mode. See stdio_capture module docs for limitations.
+stdio-capture = []
+# Enable tracing instrumentation for runtime internals.
+tracing = []
+# Enable widget state persistence with JSON file storage.
+# Adds FileStorage backend for cross-session state persistence.
+state-persistence = ["dep:serde", "dep:serde_json", "dep:base64"]
+# Legacy Crossterm backend compatibility. Enables CrosstermEventSource and the
+# `Program::new()`/`Program::with_config()` constructors that use TerminalSession.
+crossterm-compat = ["ftui-core/crossterm"]
+# Native TTY backend (replaces Crossterm on Unix). When enabled, provides
+# `Program::with_native_backend()` constructor using `ftui-tty`.
+native-backend = ["dep:ftui-tty"]
+# Enable persistent data structures (HAMT) for O(1) snapshot-based undo/redo.
+# Re-exports `im` crate types (HashMap, Vector, OrdMap) through `ftui_runtime::undo::persistent`.
+hamt = ["dep:im"]
+# Enable OpenTelemetry telemetry export via OTLP.
+# When enabled, spans can be exported to an OTLP collector.
+# Zero overhead when feature is off; minimal overhead when on but disabled via env.
+telemetry = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:tracing-opentelemetry",
+    "dep:tracing-subscriber",
+]
+
+[dependencies]
+ftui-backend = { path = "../ftui-backend", version = "0.2.1" }
+ftui-core = { path = "../ftui-core", version = "0.2.1" }
+ftui-layout = { path = "../ftui-layout", version = "0.2.1" }
+ftui-i18n = { path = "../ftui-i18n", version = "0.2.1" }
+ftui-render = { path = "../ftui-render", version = "0.2.1" }
+ftui-style = { path = "../ftui-style", version = "0.2.1" }
+ftui-text = { path = "../ftui-text", version = "0.2.1" }
+ftui-tty = { path = "../ftui-tty", version = "0.2.1", optional = true }
+tracing = "0.1.41"
+unicode-segmentation = "1.12.0"
+unicode-width = "0.2.2"
+web-time = "1.1.0"
+
+# Optional telemetry dependencies (feature-gated)
+opentelemetry = { version = "0.31", optional = true }
+opentelemetry_sdk = { version = "0.31", optional = true }
+opentelemetry-otlp = { version = "0.31", default-features = false, features = ["http-proto", "reqwest-blocking-client"], optional = true }
+tracing-opentelemetry = { version = "0.32", optional = true }
+tracing-subscriber = { version = "0.3.20", features = ["registry", "env-filter"], optional = true }
+
+# State persistence dependencies (feature-gated)
+serde = { version = "1.0.227", features = ["derive"], optional = true }
+serde_json = { version = "1.0.145", optional = true }
+base64 = { version = "0.22", optional = true }
+im = { version = "15.1", optional = true }
+
+[dev-dependencies]
+ftui-core = { path = "../ftui-core", version = "0.2.1", features = ["test-helpers"] }
+criterion = { version = "0.8.2", features = ["html_reports"] }
+proptest = "1.7.0"
+tempfile = "3.22.0"
+serde = { version = "1.0.227", features = ["derive"] }
+serde_json = "1.0.145"
+base64 = "0.22"
+im = "15.1"
+# OpenTelemetry testing infrastructure
+opentelemetry = "0.31"
+opentelemetry_sdk = { version = "0.31", features = ["testing"] }
+tracing-opentelemetry = "0.32"
+tracing-subscriber = { version = "0.3.20", features = ["registry", "env-filter"] }
+
+[[bench]]
+name = "telemetry_bench"
+harness = false
+required-features = ["telemetry"]

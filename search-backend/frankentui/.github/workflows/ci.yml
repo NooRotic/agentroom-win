@@ -1,0 +1,1081 @@
+# FrankenTUI CI/CD Pipeline
+# bd-2nu8.13: Continuous integration for code quality and testing
+#
+# Runs on every PR and push to main branch.
+# Matrix tests across OS and Rust versions.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ==========================================================================
+  # Check Job: Format, Clippy, Tests
+  # ==========================================================================
+  check:
+    name: Check (${{ matrix.os }}, ${{ matrix.rust }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        rust: [stable, nightly]
+        include:
+          - os: windows-latest
+            rust: stable
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.rust }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.rust }}-
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Enforce no-mock policy (bd-2nu8.18)
+        run: |
+          if rg -n -i '\b(mock|fake|stub)s?\b' crates tests -g '*.rs' \
+            --glob '!crates/ftui-runtime/src/subscription.rs' \
+            --glob '!crates/ftui-core/src/inline_mode.rs' \
+            --glob '!crates/ftui-widgets/src/debug_overlay.rs' \
+            --glob '!crates/ftui-render/src/sanitize.rs'; then
+            echo "No-mock policy violation detected. See docs/testing/no-mock-policy.md."
+            exit 1
+          fi
+
+      - name: Build workspace
+        run: cargo build --workspace
+
+      - name: Run tests
+        run: cargo test --workspace --lib
+
+      - name: Run tests (all features)
+        run: cargo test --workspace --all-features
+        if: matrix.rust == 'nightly'
+
+  # ==========================================================================
+  # Docs Job: Rustdoc + Examples
+  # ==========================================================================
+  docs:
+    name: Docs (rustdoc + examples)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-docs-nightly-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-docs-nightly-
+
+      - name: Run rustdoc tests
+        run: cargo test --doc --workspace
+
+      - name: Build ftui-harness examples
+        run: cargo build --examples -p ftui-harness
+
+  # ==========================================================================
+  # Feature Combinations Job
+  # ==========================================================================
+  features:
+    name: Feature Combinations
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-features-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Test ftui-extras features
+        run: |
+          for feature in canvas charts forms markdown export clipboard syntax image live logging filepicker; do
+            echo "Testing ftui-extras --features $feature"
+            cargo check -p ftui-extras --features "$feature"
+          done
+
+      - name: Test ftui-widgets features
+        run: cargo check -p ftui-widgets --features debug-overlay
+
+      - name: Test no default features
+        run: cargo check --workspace --no-default-features
+
+  # ==========================================================================
+  # Coverage Job
+  # ==========================================================================
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-coverage-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Generate coverage
+        run: cargo llvm-cov --workspace --all-targets --all-features --lcov --output-path lcov.info
+
+      - name: Enforce coverage thresholds
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import os
+          from pathlib import Path
+          import sys
+
+          lcov_path = Path("lcov.info")
+          if not lcov_path.exists():
+              raise SystemExit("lcov.info not found; coverage gate cannot run")
+
+          def threshold(crate: str, default: float) -> float:
+              env_key = f"COVERAGE_MIN_{crate.upper().replace('-', '_')}"
+              raw = os.environ.get(env_key)
+              if raw is None:
+                  return default
+              try:
+                  return float(raw)
+              except ValueError as exc:
+                  raise SystemExit(f"Invalid {env_key}={raw!r}: {exc}") from exc
+
+          thresholds = {
+              # Correctness-critical crates get stricter floors.
+              "ftui-render": threshold("ftui-render", 85.0),
+              "ftui-core": threshold("ftui-core", 85.0),
+              "ftui-style": threshold("ftui-style", 80.0),
+              "ftui-text": threshold("ftui-text", 80.0),
+              "ftui-layout": threshold("ftui-layout", 75.0),
+              "ftui-runtime": threshold("ftui-runtime", 75.0),
+              "ftui-widgets": threshold("ftui-widgets", 70.0),
+              "ftui-extras": threshold("ftui-extras", 60.0),
+          }
+          overall_raw = os.environ.get("COVERAGE_MIN_OVERALL", "75.0")
+          try:
+              overall_target = float(overall_raw)
+          except ValueError as exc:
+              raise SystemExit(f"Invalid COVERAGE_MIN_OVERALL={overall_raw!r}: {exc}") from exc
+
+          crate_totals = {crate: {"LF": 0, "LH": 0} for crate in thresholds}
+          overall = {"LF": 0, "LH": 0}
+
+          current = None
+          for raw in lcov_path.read_text().splitlines():
+              line = raw.strip()
+              if line.startswith("SF:"):
+                  current = {"file": line[3:], "LF": 0, "LH": 0}
+              elif line.startswith("LF:") and current is not None:
+                  current["LF"] = int(line[3:])
+              elif line.startswith("LH:") and current is not None:
+                  current["LH"] = int(line[3:])
+              elif line == "end_of_record" and current is not None:
+                  overall["LF"] += current["LF"]
+                  overall["LH"] += current["LH"]
+                  marker = "/crates/"
+                  path = current["file"]
+                  if marker in path:
+                      crate = path.split(marker, 1)[1].split("/", 1)[0]
+                      if crate in crate_totals:
+                          crate_totals[crate]["LF"] += current["LF"]
+                          crate_totals[crate]["LH"] += current["LH"]
+                  current = None
+
+          def pct(hit: int, total: int) -> float:
+              return 0.0 if total == 0 else (100.0 * hit / total)
+
+          failures = []
+          for crate, totals in sorted(crate_totals.items()):
+              value = pct(totals["LH"], totals["LF"])
+              target = thresholds[crate]
+              delta = value - target
+              if delta < 0:
+                  failures.append((crate, value, target, delta))
+
+          overall_pct = pct(overall["LH"], overall["LF"])
+          if overall_pct < overall_target:
+              failures.append(("overall", overall_pct, overall_target, overall_pct - overall_target))
+
+          if failures:
+              print("Coverage gate failed:")
+              for crate, value, target, delta in failures:
+                  print(f"- {crate}: {value:.2f}% (target {target:.2f}%, delta {delta:.2f}%)")
+              sys.exit(1)
+
+          print(f"Coverage gate passed: overall {overall_pct:.2f}% (target {overall_target:.2f}%)")
+          for crate, totals in sorted(crate_totals.items()):
+              value = pct(totals["LH"], totals["LF"])
+              target = thresholds[crate]
+              delta = value - target
+              print(f"- {crate}: {value:.2f}% (target {target:.2f}%, delta {delta:+.2f}%)")
+          PY
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  # ==========================================================================
+  # Benchmarks Job (push to main only)
+  # ==========================================================================
+  benchmarks:
+    name: Benchmarks
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run perf gates (bd-3cwi, bd-lff4p.5.5)
+        run: ./scripts/bench_budget.sh --quick
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: target/benchmark-results
+          retention-days: 30
+
+  # ==========================================================================
+  # Documentation Job
+  # ==========================================================================
+  docs-build:
+    name: Documentation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-docs-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build documentation
+        run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+      - name: Upload docs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: documentation
+          path: target/doc
+          retention-days: 7
+
+  # ==========================================================================
+  # Widget API E2E Test Job
+  # ==========================================================================
+  e2e-widget-api:
+    name: Widget API E2E
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-e2e-widget-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run Widget API E2E tests
+        env:
+          E2E_JSONL_VALIDATE: "1"
+          E2E_JSONL_VALIDATE_MODE: strict
+        run: ./scripts/widget_api_e2e.sh
+
+      - name: Validate Widget API E2E JSONL logs
+        if: always()
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(/tmp/widget_api_e2e_*/widget_api_e2e.jsonl)
+          if (( ${#files[@]} == 0 )); then
+            echo "No widget API JSONL logs found under /tmp/widget_api_e2e_*/widget_api_e2e.jsonl"
+            exit 1
+          fi
+          for file in "${files[@]}"; do
+            echo "Validating $file"
+            python3 tests/e2e/lib/validate_jsonl.py "$file" \
+              --schema tests/e2e/lib/e2e_jsonl_schema.json \
+              --registry tests/e2e/lib/e2e_hash_registry.json \
+              --strict
+          done
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: widget-api-e2e-logs
+          path: /tmp/widget_api_e2e_*/
+          retention-days: 7
+
+  # ==========================================================================
+  # Demo Showcase E2E Job
+  # ==========================================================================
+  demo-showcase:
+    name: Demo Showcase
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: rustfmt, clippy
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-demo-showcase-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run demo showcase E2E tests
+        env:
+          E2E_JSONL_VALIDATE: "1"
+          E2E_JSONL_VALIDATE_MODE: strict
+        run: ./scripts/demo_showcase_e2e.sh
+
+      - name: Validate demo showcase JSONL logs
+        if: always()
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(/tmp/ftui-demo-e2e-*/demo_showcase_e2e.jsonl)
+          if (( ${#files[@]} == 0 )); then
+            echo "No demo showcase JSONL logs found under /tmp/ftui-demo-e2e-*/demo_showcase_e2e.jsonl"
+            exit 1
+          fi
+          for file in "${files[@]}"; do
+            echo "Validating $file"
+            python3 tests/e2e/lib/validate_jsonl.py "$file" \
+              --schema tests/e2e/lib/e2e_jsonl_schema.json \
+              --registry tests/e2e/lib/e2e_hash_registry.json \
+              --strict
+          done
+
+      - name: Run snapshot tests
+        run: cargo test -p ftui-demo-showcase --test screen_snapshots
+
+      - name: Golden checksum verification (bd-3jlw5.2)
+        run: cargo test -p ftui-demo-showcase --test golden_checksums -- golden_checksums_verify golden_checksums_deterministic --nocapture
+
+      - name: Terminal/Web parity gate (all screens + interactions)
+        run: cargo test -p ftui-demo-showcase --test terminal_web_parity -- --nocapture
+
+      - name: Pane interaction parity gate
+        run: cargo test -p ftui-showcase-wasm pane_interaction_trace_is_deterministic -- --nocapture
+
+      - name: Baseline benchmark capture (bd-3jlw5.1)
+        run: cargo test -p ftui-demo-showcase --test baseline_capture -- --nocapture
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-showcase-e2e-logs
+          path: /tmp/ftui-demo-e2e-*/
+          retention-days: 7
+
+  # ==========================================================================
+  # PTY E2E Test Job (harness + terminal tests)
+  # ==========================================================================
+  e2e-pty:
+    name: PTY E2E (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-e2e-pty-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run native PTY E2E suite (run_all.sh)
+        env:
+          E2E_JSONL_VALIDATE: "1"
+          E2E_JSONL_VALIDATE_MODE: strict
+        run: |
+          set -euo pipefail
+          ./tests/e2e/scripts/run_all.sh
+
+      - name: Validate PTY E2E JSONL logs
+        if: always()
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(/tmp/ftui_e2e_*/e2e.jsonl)
+          if (( ${#files[@]} == 0 )); then
+            echo "No PTY E2E JSONL logs found under /tmp/ftui_e2e_*/e2e.jsonl"
+            exit 1
+          fi
+          for file in "${files[@]}"; do
+            echo "Validating $file"
+            python3 tests/e2e/lib/validate_jsonl.py "$file" \
+              --schema tests/e2e/lib/e2e_jsonl_schema.json \
+              --registry tests/e2e/lib/e2e_hash_registry.json \
+              --strict
+          done
+
+      - name: Build PTY failure repro bundle
+        if: always()
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          bundle_root="/tmp/ftui_e2e_failure_bundle_${{ matrix.os }}"
+          mkdir -p "$bundle_root"
+
+          summary_files=(/tmp/ftui_e2e_*/results/summary.json)
+          if (( ${#summary_files[@]} == 0 )); then
+            echo "No PTY E2E summary files were generated." > "$bundle_root/README.txt"
+            exit 0
+          fi
+
+          {
+            echo "# PTY E2E Minimal Repros"
+            echo
+            echo "Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            echo
+            echo "Each failed test maps to its minimal repro script in \`tests/e2e/scripts/\`."
+            echo
+          } > "$bundle_root/minimal_repros.md"
+
+          for summary in "${summary_files[@]}"; do
+            run_dir="$(dirname "$(dirname "$summary")")"
+            run_name="$(basename "$run_dir")"
+            cp "$summary" "$bundle_root/${run_name}_summary.json"
+
+            failed_count="$(jq -r '.failed // 0' "$summary" 2>/dev/null || echo 0)"
+            if [[ "$failed_count" == "0" ]]; then
+              continue
+            fi
+
+            jq -r '.tests[] | select(.status=="failed") | .name' "$summary" > "$bundle_root/${run_name}_failed_tests.txt"
+
+            while IFS= read -r test_name; do
+              [[ -n "$test_name" ]] || continue
+
+              suite_name="${test_name%%_*}"
+              script_path="tests/e2e/scripts/test_${suite_name}.sh"
+              case_script="tests/e2e/scripts/test_${test_name}.sh"
+              if [[ ! -f "$script_path" && -f "$case_script" ]]; then
+                script_path="$case_script"
+              fi
+              if [[ ! -f "$script_path" ]]; then
+                candidate="$(rg --files tests/e2e/scripts | rg "/test_(${suite_name}|${test_name})\\.sh$" | head -n1 || true)"
+                if [[ -n "$candidate" ]]; then
+                  script_path="$candidate"
+                else
+                  script_path="(script not found)"
+                fi
+              fi
+
+              echo "- \`${test_name}\`: \`${script_path}\`" >> "$bundle_root/minimal_repros.md"
+
+              log_file="$run_dir/e2e.log"
+              excerpt_file="$bundle_root/${run_name}_${test_name}_excerpt.log"
+              if [[ -f "$log_file" ]]; then
+                awk -v needle="$test_name" '
+                  index($0, needle) {
+                    start = NR - 20;
+                    if (start < 1) start = 1;
+                    end = NR + 40;
+                  }
+                  NR >= start && NR <= end { print }
+                ' "$log_file" > "$excerpt_file" || true
+              fi
+
+              pty_file="$run_dir/${test_name}.pty"
+              if [[ -f "$pty_file" ]]; then
+                xxd -l 512 "$pty_file" > "$bundle_root/${run_name}_${test_name}_pty_head.hex" || true
+              fi
+            done < "$bundle_root/${run_name}_failed_tests.txt"
+          done
+
+      - name: Upload E2E logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-pty-logs-${{ matrix.os }}
+          path: /tmp/ftui_e2e_*/
+          retention-days: 7
+
+      - name: Upload PTY E2E JSONL logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-pty-jsonl-${{ matrix.os }}
+          path: /tmp/ftui_e2e_*/**/*.jsonl
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload PTY failure repro bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-pty-failure-bundle-${{ matrix.os }}
+          path: /tmp/ftui_e2e_failure_bundle_${{ matrix.os }}/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Upload test summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-pty-summary-${{ matrix.os }}
+          path: /tmp/ftui_e2e_*/results/summary.json
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # ==========================================================================
+  # Golden Trace Replay Gates (core + web + remote where feasible)
+  # ==========================================================================
+  golden-trace-gates:
+    name: Golden Trace Gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-golden-trace-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Core replay gate (schedule trace checksums)
+        run: ./tests/e2e/scripts/test_schedule_trace.sh
+
+      - name: Web replay gate (actionable frame/event diffs)
+        run: |
+          set -euo pipefail
+          cargo test -p ftui-web session_record::tests::gate_trace_passes_on_correct_replay -- --nocapture
+          cargo test -p ftui-web session_record::tests::gate_trace_fails_with_actionable_diff -- --nocapture
+          cargo test -p ftui-web session_record::tests::gate_trace_diff_has_event_context -- --nocapture
+
+      - name: Harness replay gate (time-bounded PR profile)
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          cargo test -p ftui-harness trace_replay -- --nocapture
+
+      - name: Harness replay gate (expanded main/nightly profile)
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          cargo test -p ftui-harness trace_replay -- --nocapture
+          cargo test -p ftui-harness checksum -- --nocapture
+
+      - name: Remote replay gate (when available)
+        run: |
+          set -euo pipefail
+          if [[ -x "./tests/e2e/scripts/test_frankenterm_event_ordering_contract.sh" ]]; then
+            ./tests/e2e/scripts/test_frankenterm_event_ordering_contract.sh
+          fi
+          if [[ -x "./tests/e2e/scripts/test_frankenterm_markers_decorations.sh" ]]; then
+            ./tests/e2e/scripts/test_frankenterm_markers_decorations.sh
+          fi
+          shopt -s nullglob
+          remote_scripts=(tests/e2e/scripts/test_remote*.sh)
+          if [[ -x "./scripts/remote_terminal_e2e.sh" ]]; then
+            ./scripts/remote_terminal_e2e.sh
+          elif (( ${#remote_scripts[@]} > 0 )); then
+            for script in "${remote_scripts[@]}"; do
+              echo "Running $script"
+              "$script"
+            done
+          else
+            echo "No remote replay scripts are present yet; skipping remote gate."
+          fi
+
+      - name: Upload golden-trace logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-trace-logs
+          path: |
+            /tmp/ftui_schedule_trace_e2e/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # ==========================================================================
+  # doctor_franktentui Verification (unit + integration + e2e + coverage gate)
+  # ==========================================================================
+  doctor-franktentui-verification:
+    name: doctor_franktentui Verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DOCTOR_FTUI_ARTIFACT_ROOT: /tmp/doctor_franktentui_ci
+      DOCTOR_FRANKTENTUI_VHS_SMOKE_TIMEOUT_S: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: llvm-tools-preview
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install system dependencies (jq, rg, ffmpeg, ttyd)
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y jq ripgrep ffmpeg
+
+          if command -v ttyd >/dev/null 2>&1; then
+            ttyd --version || ttyd -v || true
+          elif sudo apt-get install -y ttyd; then
+            ttyd --version || ttyd -v || true
+          else
+            echo "ttyd not available via apt; downloading pinned binary" >&2
+            TTYD_VERSION="1.7.7"
+            curl -fsSL -o /tmp/ttyd.x86_64 "https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.x86_64"
+            sudo install -m 0755 /tmp/ttyd.x86_64 /usr/local/bin/ttyd
+            ttyd --version || ttyd -v || true
+          fi
+
+      - name: Install VHS (pinned)
+        run: |
+          set -euo pipefail
+          VHS_VERSION="0.10.0"
+          curl -fsSL -o /tmp/vhs.tar.gz "https://github.com/charmbracelet/vhs/releases/download/v${VHS_VERSION}/vhs_${VHS_VERSION}_Linux_x86_64.tar.gz"
+          tar -xzf /tmp/vhs.tar.gz -C /tmp
+          sudo install -m 0755 /tmp/vhs /usr/local/bin/vhs
+          vhs --version
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-doctor-franktentui-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run doctor_franktentui no-fake realism gate
+        run: |
+          set -euo pipefail
+          mkdir -p "${DOCTOR_FTUI_ARTIFACT_ROOT}/logs"
+          python3 ./scripts/doctor_franktentui_no_fake_gate.py \
+            2>&1 | tee "${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/no_fake_gate.log"
+
+      - name: Run doctor_franktentui unit + integration tests
+        run: |
+          set -euo pipefail
+          mkdir -p "${DOCTOR_FTUI_ARTIFACT_ROOT}/logs"
+          cargo test -p doctor_franktentui --all-targets -- --nocapture \
+            2>&1 | tee "${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/unit_integration.log"
+
+      - name: Run doctor_franktentui happy-path E2E
+        run: |
+          set -euo pipefail
+          ./scripts/doctor_franktentui_happy_e2e.sh "${DOCTOR_FTUI_ARTIFACT_ROOT}/happy" \
+            2>&1 | tee "${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/happy_e2e.log"
+
+      - name: Run doctor_franktentui failure-path E2E
+        run: |
+          set -euo pipefail
+          ./scripts/doctor_franktentui_failure_e2e.sh "${DOCTOR_FTUI_ARTIFACT_ROOT}/failure" \
+            2>&1 | tee "${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/failure_e2e.log"
+
+      - name: Build doctor_franktentui replay/triage summary
+        if: always()
+        run: |
+          set -euo pipefail
+          ./scripts/doctor_franktentui_replay_triage.py \
+            --run-root "${DOCTOR_FTUI_ARTIFACT_ROOT}/failure" \
+            --output-json "${DOCTOR_FTUI_ARTIFACT_ROOT}/failure/meta/replay_triage_report.json" \
+            --max-signals 8 \
+            --max-timeline 80 \
+            2>&1 | tee "${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/replay_triage.log"
+
+      - name: Run doctor_franktentui determinism soak
+        run: |
+          set -euo pipefail
+          ./scripts/doctor_franktentui_determinism_soak.sh "${DOCTOR_FTUI_ARTIFACT_ROOT}/determinism" 2 \
+            2>&1 | tee "${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/determinism_soak.log"
+
+      - name: Run doctor_franktentui coverage gate
+        run: |
+          set -euo pipefail
+          ./scripts/doctor_franktentui_coverage.sh "${DOCTOR_FTUI_ARTIFACT_ROOT}/coverage" \
+            2>&1 | tee "${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/coverage_gate.log"
+          cp crates/doctor_franktentui/coverage/thresholds.toml "${DOCTOR_FTUI_ARTIFACT_ROOT}/coverage/thresholds.toml"
+          cp crates/doctor_franktentui/coverage/e2e_jsonl_schema.json "${DOCTOR_FTUI_ARTIFACT_ROOT}/coverage/e2e_jsonl_schema.json"
+
+      - name: Write artifact map
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p "${DOCTOR_FTUI_ARTIFACT_ROOT}"
+          artifact_map_txt="${DOCTOR_FTUI_ARTIFACT_ROOT}/artifact_map.txt"
+          artifact_map_json="${DOCTOR_FTUI_ARTIFACT_ROOT}/artifact_map.json"
+          {
+            echo "doctor_franktentui artifact map"
+            echo "generated_at_utc=$(date -u +%Y%m%dT%H%M%SZ)"
+            echo "git_rev=$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+            echo "artifact_root=${DOCTOR_FTUI_ARTIFACT_ROOT}"
+            echo "unit_integration_log=${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/unit_integration.log"
+            echo "no_fake_gate_log=${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/no_fake_gate.log"
+            echo "happy_e2e_log=${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/happy_e2e.log"
+            echo "happy_summary=${DOCTOR_FTUI_ARTIFACT_ROOT}/happy/meta/summary.json"
+            echo "happy_events_jsonl=${DOCTOR_FTUI_ARTIFACT_ROOT}/happy/meta/events.jsonl"
+            echo "happy_events_validation_report=${DOCTOR_FTUI_ARTIFACT_ROOT}/happy/meta/events_validation_report.json"
+            echo "happy_artifact_manifest=${DOCTOR_FTUI_ARTIFACT_ROOT}/happy/meta/artifact_manifest.json"
+            echo "failure_e2e_log=${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/failure_e2e.log"
+            echo "failure_summary=${DOCTOR_FTUI_ARTIFACT_ROOT}/failure/meta/summary.json"
+            echo "failure_events_jsonl=${DOCTOR_FTUI_ARTIFACT_ROOT}/failure/meta/events.jsonl"
+            echo "failure_events_validation_report=${DOCTOR_FTUI_ARTIFACT_ROOT}/failure/meta/events_validation_report.json"
+            echo "failure_case_results=${DOCTOR_FTUI_ARTIFACT_ROOT}/failure/meta/case_results.json"
+            echo "replay_triage_log=${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/replay_triage.log"
+            echo "replay_triage_report_json=${DOCTOR_FTUI_ARTIFACT_ROOT}/failure/meta/replay_triage_report.json"
+            echo "determinism_soak_log=${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/determinism_soak.log"
+            echo "determinism_run_index=${DOCTOR_FTUI_ARTIFACT_ROOT}/determinism/meta/run_index.tsv"
+            echo "determinism_report_json=${DOCTOR_FTUI_ARTIFACT_ROOT}/determinism/meta/determinism_report.json"
+            echo "determinism_report_txt=${DOCTOR_FTUI_ARTIFACT_ROOT}/determinism/meta/determinism_report.txt"
+            echo "coverage_gate_log=${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/coverage_gate.log"
+            echo "coverage_thresholds_toml=${DOCTOR_FTUI_ARTIFACT_ROOT}/coverage/thresholds.toml"
+            echo "telemetry_schema_json=${DOCTOR_FTUI_ARTIFACT_ROOT}/coverage/e2e_jsonl_schema.json"
+            echo "coverage_report_json=${DOCTOR_FTUI_ARTIFACT_ROOT}/coverage/coverage_gate_report.json"
+            echo "coverage_report_txt=${DOCTOR_FTUI_ARTIFACT_ROOT}/coverage/coverage_gate_report.txt"
+            echo "artifact_map_json=${artifact_map_json}"
+          } > "${artifact_map_txt}"
+
+          python3 - "${artifact_map_txt}" "${artifact_map_json}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+txt_path = Path(sys.argv[1])
+json_path = Path(sys.argv[2])
+
+raw_lines = txt_path.read_text(encoding="utf-8").splitlines()
+raw_kv: dict[str, str] = {}
+for line in raw_lines:
+    if "=" not in line:
+        continue
+    key, value = line.split("=", 1)
+    raw_kv[key.strip()] = value.strip()
+
+
+def looks_like_path(value: str) -> bool:
+    if value.startswith(("/", "./")):
+        return True
+    return any(value.endswith(suffix) for suffix in (".log", ".txt", ".json", ".tsv", ".toml"))
+
+
+artifacts: dict[str, str] = {}
+metadata: dict[str, str] = {}
+for key, value in sorted(raw_kv.items()):
+    if key in {"git_rev", "generated_at_utc"}:
+        metadata[key] = value
+    elif looks_like_path(value):
+        artifacts[key] = value
+    else:
+        metadata[key] = value
+
+exists: dict[str, bool] = {}
+sizes_bytes: dict[str, int | None] = {}
+for key, value in artifacts.items():
+    path = Path(value)
+    exists[key] = path.exists()
+    if path.exists() and path.is_file():
+        sizes_bytes[key] = int(path.stat().st_size)
+    else:
+        sizes_bytes[key] = None
+
+payload = {
+    "schema_version": "1.0.0",
+    "metadata": metadata,
+    "artifacts": artifacts,
+    "exists": exists,
+    "sizes_bytes": sizes_bytes,
+}
+json_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+PY
+
+          {
+            echo "## doctor_franktentui artifact map"
+            echo ""
+            echo '```'
+            cat "${artifact_map_txt}"
+            echo '```'
+            echo ""
+            echo "artifact_map_json=${artifact_map_json}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload doctor_franktentui verification artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-franktentui-verification
+          path: /tmp/doctor_franktentui_ci/
+          retention-days: 14
+          if-no-files-found: error
+
+  # ==========================================================================
+  # Fuzz Build Check
+  # ==========================================================================
+  fuzz:
+    name: Fuzz Build Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-fuzz-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build fuzz targets
+        run: cargo fuzz build
+
+      - name: Quick fuzz run (20s per target)
+        run: |
+          cargo fuzz run fuzz_input_parser -- -max_len=4096 -max_total_time=20
+          cargo fuzz run fuzz_input_parser_structured -- -max_len=4096 -max_total_time=20
+          cargo fuzz run fuzz_input_parser_long_seq -- -max_total_time=20
+          cargo fuzz run fuzz_vt_parser -- -max_len=4096 -max_total_time=20
+          cargo fuzz run fuzz_grid_mutations -- -max_len=4096 -max_total_time=20
+
+  # ==========================================================================
+  # MSRV Check (Minimum Supported Rust Version)
+  # ==========================================================================
+  msrv:
+    name: MSRV Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          # Using nightly as MSRV since project requires edition 2024
+          toolchain: nightly
+
+      - name: Check MSRV
+        run: cargo check --workspace
+
+  # ==========================================================================
+  # WASM Build Check (host-agnostic surfaces)
+  # ==========================================================================
+  wasm:
+    name: WASM Build Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - name: Install wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Check host-agnostic crates for wasm32-unknown-unknown
+        run: |
+          set -euo pipefail
+          cargo check --target wasm32-unknown-unknown -p ftui-core
+          cargo check --target wasm32-unknown-unknown -p ftui-render
+          cargo check --target wasm32-unknown-unknown -p ftui-style
+          cargo check --target wasm32-unknown-unknown -p ftui-layout
+          cargo check --target wasm32-unknown-unknown -p ftui-text
+          cargo check --target wasm32-unknown-unknown -p ftui-i18n
+          cargo check --target wasm32-unknown-unknown -p frankenterm-core
+          cargo check --target wasm32-unknown-unknown -p frankenterm-web

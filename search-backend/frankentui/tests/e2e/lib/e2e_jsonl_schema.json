@@ -1,0 +1,747 @@
+{
+  "schema_version": "e2e-jsonl-v1",
+  "common_required": [
+    "schema_version",
+    "type",
+    "timestamp",
+    "run_id",
+    "seed"
+  ],
+  "common_types": {
+    "schema_version": "string",
+    "type": "string",
+    "timestamp": "string",
+    "run_id": "string",
+    "correlation_id": "string",
+    "seed": ["number", "null"]
+  },
+  "events": {
+    "env": {
+      "required": [
+        "host",
+        "rustc",
+        "cargo",
+        "git_commit",
+        "git_dirty",
+        "deterministic",
+        "term",
+        "colorterm",
+        "no_color"
+      ],
+      "optional": [],
+      "types": {
+        "host": "string",
+        "rustc": "string",
+        "cargo": "string",
+        "git_commit": "string",
+        "git_dirty": "boolean",
+        "deterministic": "boolean",
+        "term": "string",
+        "colorterm": "string",
+        "no_color": "string"
+      }
+    },
+    "run_start": {
+      "required": [
+        "command",
+        "log_dir",
+        "results_dir"
+      ],
+      "optional": [],
+      "types": {
+        "command": "string",
+        "log_dir": "string",
+        "results_dir": "string"
+      }
+    },
+    "run_end": {
+      "required": [
+        "status",
+        "duration_ms",
+        "failed_count"
+      ],
+      "optional": [],
+      "types": {
+        "status": "string",
+        "duration_ms": "number",
+        "failed_count": "number"
+      }
+    },
+    "step_start": {
+      "required": [
+        "step"
+      ],
+      "optional": [
+        "mode",
+        "hash_key",
+        "cols",
+        "rows"
+      ],
+      "types": {
+        "step": "string",
+        "mode": "string",
+        "hash_key": "string",
+        "cols": ["number", "null"],
+        "rows": ["number", "null"]
+      }
+    },
+    "step_end": {
+      "required": [
+        "step",
+        "status",
+        "duration_ms"
+      ],
+      "optional": [
+        "mode",
+        "hash_key",
+        "cols",
+        "rows"
+      ],
+      "types": {
+        "step": "string",
+        "status": "string",
+        "duration_ms": "number",
+        "mode": "string",
+        "hash_key": "string",
+        "cols": ["number", "null"],
+        "rows": ["number", "null"]
+      }
+    },
+    "case_step_start": {
+      "required": [
+        "case",
+        "step",
+        "action"
+      ],
+      "optional": [
+        "details",
+        "mode",
+        "hash_key",
+        "cols",
+        "rows"
+      ],
+      "types": {
+        "case": "string",
+        "step": "string",
+        "action": "string",
+        "details": "string",
+        "mode": "string",
+        "hash_key": "string",
+        "cols": ["number", "null"],
+        "rows": ["number", "null"]
+      }
+    },
+    "case_step_end": {
+      "required": [
+        "case",
+        "step",
+        "status",
+        "duration_ms"
+      ],
+      "optional": [
+        "action",
+        "details",
+        "mode",
+        "hash_key",
+        "cols",
+        "rows"
+      ],
+      "types": {
+        "case": "string",
+        "step": "string",
+        "status": "string",
+        "duration_ms": "number",
+        "action": "string",
+        "details": "string",
+        "mode": "string",
+        "hash_key": "string",
+        "cols": ["number", "null"],
+        "rows": ["number", "null"]
+      }
+    },
+    "pane_trace": {
+      "required": [
+        "event_seq",
+        "trace_id",
+        "host",
+        "pane_tree_hash",
+        "focus_state_hash",
+        "splitter_state_hash",
+        "duration_ms",
+        "status"
+      ],
+      "optional": [
+        "details",
+        "failure_code"
+      ],
+      "types": {
+        "event_seq": "number",
+        "trace_id": "string",
+        "host": "string",
+        "pane_tree_hash": "string",
+        "focus_state_hash": "string",
+        "splitter_state_hash": "string",
+        "duration_ms": "number",
+        "status": "string",
+        "details": "string",
+        "failure_code": "string"
+      }
+    },
+    "pane_artifact_bundle": {
+      "required": [
+        "event_seq",
+        "trace_id",
+        "bundle_id",
+        "manifest_path",
+        "jsonl_path",
+        "replay_trace_path",
+        "snapshots_dir",
+        "status"
+      ],
+      "optional": [
+        "notes"
+      ],
+      "types": {
+        "event_seq": "number",
+        "trace_id": "string",
+        "bundle_id": "string",
+        "manifest_path": "string",
+        "jsonl_path": "string",
+        "replay_trace_path": "string",
+        "snapshots_dir": "string",
+        "status": "string",
+        "notes": "string"
+      }
+    },
+    "case": {
+      "required": [
+        "scenario",
+        "mode",
+        "cols",
+        "rows",
+        "status",
+        "hash",
+        "duration_ms",
+        "error",
+        "screen"
+      ],
+      "optional": [],
+      "types": {
+        "scenario": "string",
+        "mode": "string",
+        "cols": "number",
+        "rows": "number",
+        "status": "string",
+        "hash": "string",
+        "duration_ms": "number",
+        "error": "string",
+        "screen": "string"
+      }
+    },
+    "pty_capture": {
+      "required": [
+        "output_file",
+        "output_sha256",
+        "output_bytes",
+        "cols",
+        "rows",
+        "exit_code"
+      ],
+      "optional": [
+        "canonical_file",
+        "canonical_sha256",
+        "canonical_bytes"
+      ],
+      "types": {
+        "output_file": "string",
+        "output_sha256": "string",
+        "output_bytes": "number",
+        "cols": "number",
+        "rows": "number",
+        "exit_code": "number",
+        "canonical_file": "string",
+        "canonical_sha256": "string",
+        "canonical_bytes": "number"
+      }
+    },
+    "assert": {
+      "required": [
+        "assertion",
+        "status"
+      ],
+      "optional": [
+        "details"
+      ],
+      "types": {
+        "assertion": "string",
+        "status": "string",
+        "details": "string"
+      }
+    },
+    "artifact": {
+      "required": [
+        "artifact_type",
+        "path",
+        "status"
+      ],
+      "optional": [
+        "sha256",
+        "bytes"
+      ],
+      "types": {
+        "artifact_type": "string",
+        "path": "string",
+        "status": "string",
+        "sha256": "string",
+        "bytes": "number"
+      }
+    },
+    "input": {
+      "required": [
+        "input_type",
+        "encoding",
+        "input_hash"
+      ],
+      "optional": [
+        "bytes_b64",
+        "details",
+        "mode",
+        "hash_key",
+        "cols",
+        "rows"
+      ],
+      "types": {
+        "input_type": "string",
+        "encoding": "string",
+        "bytes_b64": "string",
+        "input_hash": "string",
+        "details": "string",
+        "mode": "string",
+        "hash_key": "string",
+        "cols": ["number", "null"],
+        "rows": ["number", "null"]
+      }
+    },
+    "frame": {
+      "required": [
+        "frame_idx",
+        "hash_algo",
+        "frame_hash"
+      ],
+      "optional": [
+        "ts_ms",
+        "mode",
+        "hash_key",
+        "cols",
+        "rows",
+        "patch_hash",
+        "patch_bytes",
+        "patch_cells",
+        "patch_runs",
+        "render_ms",
+        "present_ms",
+        "present_bytes",
+        "checksum_chain",
+        "interaction_hash",
+        "hovered_link_id",
+        "cursor_offset",
+        "cursor_style",
+        "selection_active",
+        "selection_start",
+        "selection_end"
+      ],
+      "types": {
+        "frame_idx": "number",
+        "hash_algo": "string",
+        "frame_hash": "string",
+        "ts_ms": "number",
+        "mode": "string",
+        "hash_key": "string",
+        "cols": ["number", "null"],
+        "rows": ["number", "null"],
+        "patch_hash": "string",
+        "patch_bytes": "number",
+        "patch_cells": "number",
+        "patch_runs": "number",
+        "render_ms": "number",
+        "present_ms": "number",
+        "present_bytes": "number",
+        "checksum_chain": "string",
+        "interaction_hash": "string",
+        "hovered_link_id": "number",
+        "cursor_offset": "number",
+        "cursor_style": "number",
+        "selection_active": "boolean",
+        "selection_start": "number",
+        "selection_end": "number"
+      }
+    },
+    "error": {
+      "required": [
+        "message"
+      ],
+      "optional": [
+        "case",
+        "step",
+        "mode",
+        "hash_key",
+        "cols",
+        "rows",
+        "exit_code",
+        "stack",
+        "details"
+      ],
+      "types": {
+        "message": "string",
+        "case": "string",
+        "step": "string",
+        "mode": "string",
+        "hash_key": "string",
+        "cols": ["number", "null"],
+        "rows": ["number", "null"],
+        "exit_code": ["number", "null"],
+        "stack": "string",
+        "details": "string"
+      }
+    },
+    "browser_env": {
+      "required": [
+        "browser",
+        "user_agent",
+        "dpr"
+      ],
+      "optional": [
+        "browser_version",
+        "platform",
+        "locale",
+        "timezone",
+        "headless",
+        "viewport_css_px",
+        "viewport_px",
+        "zoom",
+        "canvas_css_px",
+        "canvas_px"
+      ],
+      "types": {
+        "browser": "string",
+        "browser_version": "string",
+        "user_agent": "string",
+        "dpr": "number",
+        "platform": "string",
+        "locale": "string",
+        "timezone": "string",
+        "headless": "boolean",
+        "viewport_css_px": "object",
+        "viewport_px": "object",
+        "zoom": "number",
+        "canvas_css_px": "object",
+        "canvas_px": "object"
+      }
+    },
+    "gpu_adapter": {
+      "required": [
+        "api",
+        "adapter_name"
+      ],
+      "optional": [
+        "backend",
+        "vendor",
+        "architecture",
+        "device",
+        "description",
+        "limits",
+        "features",
+        "is_fallback_adapter"
+      ],
+      "types": {
+        "api": "string",
+        "adapter_name": "string",
+        "backend": "string",
+        "vendor": "string",
+        "architecture": "string",
+        "device": "string",
+        "description": "string",
+        "limits": "object",
+        "features": "array",
+        "is_fallback_adapter": "boolean"
+      }
+    },
+    "ws_metrics": {
+      "required": [
+        "label",
+        "ws_url",
+        "bytes_tx",
+        "bytes_rx",
+        "messages_tx",
+        "messages_rx"
+      ],
+      "optional": [
+        "connect_ms",
+        "reconnects",
+        "close_code",
+        "close_reason",
+        "dropped_messages",
+        "rtt_histogram_ms",
+        "latency_histogram_ms"
+      ],
+      "types": {
+        "label": "string",
+        "ws_url": "string",
+        "bytes_tx": "number",
+        "bytes_rx": "number",
+        "messages_tx": "number",
+        "messages_rx": "number",
+        "connect_ms": "number",
+        "reconnects": "number",
+        "close_code": ["number", "null"],
+        "close_reason": "string",
+        "dropped_messages": "number",
+        "rtt_histogram_ms": "object",
+        "latency_histogram_ms": "object"
+      }
+    },
+    "large_screen_env": {
+      "required": [
+        "term",
+        "colorterm",
+        "no_color"
+      ],
+      "optional": [
+        "tmux",
+        "zellij",
+        "kitty_window_id",
+        "term_program"
+      ],
+      "types": {
+        "term": "string",
+        "colorterm": "string",
+        "no_color": "string",
+        "tmux": "string",
+        "zellij": "string",
+        "kitty_window_id": "string",
+        "term_program": "string"
+      }
+    },
+    "large_screen_case": {
+      "required": [
+        "case",
+        "status",
+        "screen_mode",
+        "cols",
+        "rows",
+        "ui_height",
+        "diff_bayesian",
+        "bocpd",
+        "conformal",
+        "evidence_jsonl",
+        "pty_output",
+        "caps_file",
+        "duration_ms"
+      ],
+      "optional": [],
+      "types": {
+        "case": "string",
+        "status": "string",
+        "screen_mode": "string",
+        "cols": "number",
+        "rows": "number",
+        "ui_height": "number",
+        "diff_bayesian": "boolean",
+        "bocpd": "boolean",
+        "conformal": "boolean",
+        "evidence_jsonl": "string",
+        "pty_output": "string",
+        "caps_file": "string",
+        "duration_ms": "number"
+      }
+    },
+    "budgeted_refresh_case": {
+      "required": [
+        "case",
+        "status",
+        "screen_mode",
+        "cols",
+        "rows",
+        "frame_budget_us",
+        "render_budget_us",
+        "evidence_jsonl",
+        "pty_output",
+        "duration_ms",
+        "widget_refresh_hash"
+      ],
+      "optional": [],
+      "types": {
+        "case": "string",
+        "status": "string",
+        "screen_mode": "string",
+        "cols": "number",
+        "rows": "number",
+        "frame_budget_us": "number",
+        "render_budget_us": "number",
+        "evidence_jsonl": "string",
+        "pty_output": "string",
+        "duration_ms": "number",
+        "widget_refresh_hash": "string"
+      }
+    },
+    "span_diff_case": {
+      "required": [
+        "case",
+        "status",
+        "screen_mode",
+        "cols",
+        "rows",
+        "evidence_jsonl",
+        "pty_output",
+        "duration_ms",
+        "diff_hash"
+      ],
+      "optional": [],
+      "types": {
+        "case": "string",
+        "status": "string",
+        "screen_mode": "string",
+        "cols": "number",
+        "rows": "number",
+        "evidence_jsonl": "string",
+        "pty_output": "string",
+        "duration_ms": "number",
+        "diff_hash": "string"
+      }
+    },
+    "tile_skip_case": {
+      "required": [
+        "case",
+        "status",
+        "screen_mode",
+        "cols",
+        "rows",
+        "evidence_jsonl",
+        "pty_output",
+        "duration_ms",
+        "diff_hash"
+      ],
+      "optional": [],
+      "types": {
+        "case": "string",
+        "status": "string",
+        "screen_mode": "string",
+        "cols": "number",
+        "rows": "number",
+        "evidence_jsonl": "string",
+        "pty_output": "string",
+        "duration_ms": "number",
+        "diff_hash": "string"
+      }
+    },
+    "selector_case": {
+      "required": [
+        "case",
+        "status",
+        "screen_mode",
+        "cols",
+        "rows",
+        "evidence_jsonl",
+        "pty_output",
+        "duration_ms",
+        "decision_hash",
+        "phase_len"
+      ],
+      "optional": [],
+      "types": {
+        "case": "string",
+        "status": "string",
+        "screen_mode": "string",
+        "cols": "number",
+        "rows": "number",
+        "evidence_jsonl": "string",
+        "pty_output": "string",
+        "duration_ms": "number",
+        "decision_hash": "string",
+        "phase_len": "number"
+      }
+    },
+    "table_theme_gallery": {
+      "required": [
+        "screen_id",
+        "preset_id",
+        "phase",
+        "highlight_target",
+        "resolved_style_hash",
+        "column_widths",
+        "table_dims",
+        "terminal_size",
+        "checksum"
+      ],
+      "optional": [
+        "screen",
+        "preview_modes",
+        "preset_name",
+        "preview_mode",
+        "effects_hash",
+        "output_hash",
+        "demo_run_id"
+      ],
+      "types": {
+        "screen_id": "number",
+        "screen": "string",
+        "preview_modes": "string",
+        "preset_id": "string",
+        "preset_name": "string",
+        "preview_mode": "string",
+        "phase": "number",
+        "highlight_target": "string",
+        "resolved_style_hash": "string",
+        "effects_hash": "string",
+        "column_widths": "array",
+        "table_dims": "object",
+        "terminal_size": "object",
+        "output_hash": "string",
+        "checksum": "string",
+        "demo_run_id": "string"
+      }
+    },
+    "table_theme_action": {
+      "required": [
+        "action",
+        "preset_name",
+        "style_hash",
+        "effects_hash",
+        "effect_count",
+        "output_hash",
+        "checksum"
+      ],
+      "optional": [
+        "file_path",
+        "clipboard_path",
+        "export_sha256",
+        "clipboard_sha256"
+      ],
+      "types": {
+        "action": "string",
+        "preset_name": "string",
+        "style_hash": "string",
+        "effects_hash": "string",
+        "effect_count": "number",
+        "file_path": [
+          "string",
+          "null"
+        ],
+        "clipboard_path": [
+          "string",
+          "null"
+        ],
+        "export_sha256": [
+          "string",
+          "null"
+        ],
+        "clipboard_sha256": [
+          "string",
+          "null"
+        ],
+        "output_hash": "string",
+        "checksum": "string"
+      }
+    }
+  }
+}

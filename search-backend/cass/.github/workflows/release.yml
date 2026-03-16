@@ -1,0 +1,346 @@
+# .github/workflows/release.yml
+# Release workflow: build cross-platform binaries with SHA256 checksums
+# and notify package managers (Homebrew, Scoop)
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g., v0.2.0)"
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: cass
+            asset_name: cass-linux-amd64
+          # Linux ARM64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact_name: cass
+            asset_name: cass-linux-arm64
+          # macOS Intel - DISABLED: ort-sys doesn't provide prebuilt ONNX Runtime binaries
+          # for x86_64-apple-darwin. Intel Mac users can build from source.
+          # - os: macos-15
+          #   target: x86_64-apple-darwin
+          #   artifact_name: cass
+          #   asset_name: cass-darwin-amd64
+          # macOS Apple Silicon
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact_name: cass
+            asset_name: cass-darwin-arm64
+          # Windows
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: cass.exe
+            asset_name: cass-windows-amd64
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
+
+      - name: Install OpenSSL (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install openssl@3
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> $GITHUB_ENV
+
+      - name: Build release
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Create tarball with checksum (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          TARBALL="${{ matrix.asset_name }}.tar.gz"
+          cd target/${{ matrix.target }}/release
+          tar -czf "../../../dist/$TARBALL" ${{ matrix.artifact_name }}
+          cd ../../../dist
+          shasum -a 256 "$TARBALL" > "$TARBALL.sha256"
+          echo "### ${{ matrix.target }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat "$TARBALL.sha256" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Create zip with checksum (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $zipName = "${{ matrix.asset_name }}.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" -DestinationPath "dist/$zipName"
+          cd dist
+          $hash = (Get-FileHash -Algorithm SHA256 $zipName).Hash.ToLower()
+          "$hash  $zipName" | Out-File -Encoding ASCII "$zipName.sha256"
+          Write-Output "### ${{ matrix.target }}" | Out-File -Append -Encoding UTF8 $env:GITHUB_STEP_SUMMARY
+          Write-Output '```' | Out-File -Append -Encoding UTF8 $env:GITHUB_STEP_SUMMARY
+          Get-Content "$zipName.sha256" | Out-File -Append -Encoding UTF8 $env:GITHUB_STEP_SUMMARY
+          Write-Output '```' | Out-File -Append -Encoding UTF8 $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: dist/*
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Extract version from tag
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            RAW_TAG="${GITHUB_REF#refs/tags/}"
+          else
+            RAW_TAG="${{ inputs.tag }}"
+          fi
+          if [[ -z "${RAW_TAG}" ]]; then
+            echo "Tag is required."
+            exit 1
+          fi
+          VERSION="${RAW_TAG#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate tag matches Cargo.toml version
+        shell: bash
+        run: |
+          CARGO_VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          if [[ "${CARGO_VERSION}" != "${{ steps.version.outputs.version }}" ]]; then
+            echo "Tag version (${{ steps.version.outputs.version }}) does not match Cargo.toml (${CARGO_VERSION})."
+            exit 1
+          fi
+
+      - name: List artifacts
+        run: |
+          echo "## Release Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ls -la artifacts/ >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## SHA256 Checksums" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat artifacts/*.sha256 >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Create combined checksums file
+        run: |
+          cd artifacts
+          cat *.sha256 > SHA256SUMS.txt
+
+      - name: Copy install scripts
+        run: |
+          cp install.sh artifacts/
+          cp install.ps1 artifacts/
+
+      - name: Generate SBOM (SPDX)
+        uses: anchore/sbom-action@62ad5284b8ced813296287a0b63906cb364b73ee # v0
+        with:
+          path: artifacts
+          format: spdx-json
+          output-file: artifacts/sbom.spdx.json
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        with:
+          subject-path: artifacts/*
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9 # v3
+
+      - name: Sign release artifacts (keyless)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          for asset in artifacts/*.tar.gz artifacts/*.zip; do
+            [ -f "$asset" ] || continue
+            cosign sign-blob --yes \
+              --output-signature "${asset}.sig" \
+              --output-certificate "${asset}.crt" \
+              "$asset"
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2
+        with:
+          name: v${{ steps.version.outputs.version }}
+          files: artifacts/*
+          generate_release_notes: true
+          body: |
+            ## Installation
+
+            ### Quick Install (recommended)
+            ```bash
+            # Linux/macOS
+            curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/coding_agent_session_search/main/install.sh" | bash -s -- --easy-mode --verify
+
+            # Windows (PowerShell)
+            irm https://raw.githubusercontent.com/Dicklesworthstone/coding_agent_session_search/main/install.ps1 | iex
+            ```
+
+            ### Package Managers
+            ```bash
+            # Homebrew
+            brew install dicklesworthstone/tap/cass
+
+            # Scoop
+            scoop bucket add dicklesworthstone https://github.com/Dicklesworthstone/scoop-bucket
+            scoop install dicklesworthstone/cass
+            ```
+
+            ### Verify Downloads
+            All binaries include SHA256 checksums. Download `SHA256SUMS.txt` and verify:
+            ```bash
+            sha256sum -c SHA256SUMS.txt
+            ```
+
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+  publish-crates:
+    name: Publish to crates.io
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: ${{ !contains(needs.release.outputs.version, '-') }}
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish to crates.io
+        if: ${{ env.CARGO_REGISTRY_TOKEN != '' }}
+        run: cargo publish --all-features --locked
+
+      - name: Warn when token is missing
+        if: ${{ env.CARGO_REGISTRY_TOKEN == '' }}
+        run: echo "::warning::CARGO_REGISTRY_TOKEN is not configured; skipping publish."
+
+  # ==========================================================================
+  # Notify Package Managers to Update
+  # ==========================================================================
+  notify-homebrew-tap:
+    name: Notify Homebrew Tap
+    runs-on: ubuntu-latest
+    needs: release
+    timeout-minutes: 5
+    # Don't fail the release if notification fails (token may not be configured)
+    continue-on-error: true
+    env:
+      HAS_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+    steps:
+      - name: Check for token
+        id: check
+        run: |
+          if [[ "${{ env.HAS_TOKEN }}" != "true" ]]; then
+            echo "::warning::HOMEBREW_TAP_TOKEN not configured, skipping notification"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Trigger formula update
+        if: steps.check.outputs.skip != 'true'
+        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0 # v3
+        with:
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          repository: Dicklesworthstone/homebrew-tap
+          event-type: formula-update
+          client-payload: |
+            {
+              "tool": "cass",
+              "version": "${{ needs.release.outputs.version }}"
+            }
+
+      - name: Log dispatch
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          echo "Dispatched formula-update event to homebrew-tap"
+          echo "   Tool: cass"
+          echo "   Version: ${{ needs.release.outputs.version }}"
+
+  notify-scoop-bucket:
+    name: Notify Scoop Bucket
+    runs-on: ubuntu-latest
+    needs: release
+    timeout-minutes: 5
+    # Don't fail the release if notification fails (token may not be configured)
+    continue-on-error: true
+    env:
+      HAS_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN != '' }}
+    steps:
+      - name: Check for token
+        id: check
+        run: |
+          if [[ "${{ env.HAS_TOKEN }}" != "true" ]]; then
+            echo "::warning::SCOOP_BUCKET_TOKEN not configured, skipping notification"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Trigger manifest update
+        if: steps.check.outputs.skip != 'true'
+        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0 # v3
+        with:
+          token: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+          repository: Dicklesworthstone/scoop-bucket
+          event-type: manifest-update
+          client-payload: |
+            {
+              "tool": "cass",
+              "version": "${{ needs.release.outputs.version }}"
+            }
+
+      - name: Log dispatch
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          echo "Dispatched manifest-update event to scoop-bucket"
+          echo "   Tool: cass"
+          echo "   Version: ${{ needs.release.outputs.version }}"

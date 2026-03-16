@@ -1,0 +1,24 @@
+ 1: Tour │ 2: Dash │ 3: Shakes │ 4: Code │ 5: Widgets │ 6: Layout │ 7: Forms    
+╭───────────────────────────────Determinism Lab────────────────────────────────╮
+│╭──────────────────────────────Determinism Lab───────────────────────────────╮│
+││Determinism Lab  Seed: 7  Frame: 0  Status: Live  Fault: off                ││
+││                                                                            ││
+││┌Equivalence─────────────────────────────────┐┌Scene Preview───────────────┐││
+│││Strategy  Changes   Checksum             Sta││O...........................│││
+│││Full            73   0x5611d94c497a15c0   OK││..ET....W...WV.F.JEDKT.....P│││
+│││DirtyRows       73   0x5611d94c497a15c0   OK││............................│││
+│││FullRedraw    1080   0x5611d94c497a15c0   OK││............................│││
+│││                                            ││............................│││
+│││Timeline: 7a15c0                            ││............................│││
+│││                                            ││............................│││
+│││Scenario: Baseline (10f)                    │└────────────────────────────┘││
+│││Controls: 1/2/3 strategy  [/] seed  Space pa│┌Checks──────────────────────┐││
+│││No runs yet. Click a scenario or press Enter││Scenarios  (click/Enter)  A │││
+│││Keys: Enter/R run selected  A run all  C log││> Baseline (10f)            │││
+│││                                            ││  Drift (30f)               │││
+│││                                            ││  Fault Injection (1f)      │││
+│││                                            ││Runs  (click row to inspect)│││
+││└────────────────────────────────────────────┘└────────────────────────────┘││
+│╰────────────────────────────────────────────────────────────────────────────╯│
+╰──────────────────────────────────────────────────────────────────────────────╯
+ Determinism Lab [40/43] [h] [cmd] [p] [d]  Tab/Shift+Tab: next/prev  0x0 00:00 
