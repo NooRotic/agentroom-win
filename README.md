@@ -1,339 +1,223 @@
-# AgentRoom
+# agentroom-win
 
-A desktop app that turns your AI coding agents into animated pixel art characters in a virtual office — with full session search, transcript browsing, and real-time activity monitoring across Claude Code, Codex, and Gemini.
+> **Just my working build.** This is a personal Windows 11 port of [AgentRoom](https://github.com/liuyixin-louis/agentroom) by Yixin Liu. The original did not build or run on Windows out of the box. With the help of Claude (Anthropic), I diagnosed and fixed the issues. Sessions now show, agents animate, transcripts load — on Windows 11.
 
 ![AgentRoom screenshot](docs/screenshots/hero-office-tagged.png)
 
-## Quick Start
+---
 
-```bash
-# Prerequisites: Rust (rustup.rs), Node.js 18+, Xcode CLI tools (macOS) or webkit2gtk (Linux)
+## What is AgentRoom?
 
-git clone --recursive https://github.com/liuyixin-louis/agentroom.git
-cd agentroom
+AgentRoom is a desktop app that turns your AI coding agents into animated pixel art characters in a virtual office — with full session search, transcript browsing, and real-time activity monitoring across Claude Code, Codex, and Gemini.
 
-# Build the CASS search backend (~5 min, one-time)
-./scripts/install-cass.sh
-source ~/.zshrc
+It was built by **Yixin Liu** ([liuyixin-louis](https://github.com/liuyixin-louis)) and uses the [CASS](https://github.com/Dicklesworthstone/coding_agent_session_search) search backend and [frankentui](https://github.com/Dicklesworthstone/frankentui) TUI framework by **Jeffrey Emanuel** ([Dicklesworthstone](https://github.com/Dicklesworthstone)).
 
-# Index your agent sessions
-cass index --full
-
-# Launch the app
-npm install
-npm run tauri dev
-```
-
-## Features
-
-- **Real-time agent visualization** — each active coding agent gets its own animated character that types when writing code, reads when searching files, and idles when waiting for input
-- **Multi-agent support** — Claude Code, Codex, and Gemini agents displayed simultaneously with distinct visual styles
-- **Work & idle rooms** — active agents sit at desks in the Work Room; idle agents walk to the Break Room and hang out on couches
-- **Per-project focus** — switch the office view to show only agents working on a specific project
-- **Session search & browsing** — search across all agent sessions with full-text search powered by [CASS](https://github.com/Dicklesworthstone/coding_agent_session_search), grouped by project
-- **Transcript viewer** — click any session to read the full conversation in-app
-- **Open in Terminal** — one-click "Open in iTerm2" button to jump straight into a session's working directory and resume the agent
-- **Sub-agent visualization** — Task tool sub-agents spawn as separate characters linked to their parent
-- **Speech bubbles** — visual indicators when an agent is waiting for input or needs permission approval
-- **Sound notifications** — chime when an agent finishes its turn
-- **Token usage dashboard** — real-time spend and rate limit tracking
-- **AI-powered session tagging** — auto-summarize and categorize sessions
-- **Persistent layouts** — office design is saved per project
-- **Claude Code skill** — drop-in [`searching-agent-sessions`](skills/searching-agent-sessions/) skill lets you search past sessions from any Claude Code conversation (just copy to `~/.claude/skills/`)
-
-## How It Works
-
-AgentRoom watches the JSONL transcript files that coding agents write to disk. A Rust file watcher (`notify` crate) detects new lines in real time and emits structured events to the frontend via Tauri's event system. The React frontend drives a Canvas 2D game engine with BFS pathfinding and a character state machine.
-
-```
-JSONL files (Claude/Codex/Gemini)
-  -> Rust file watcher (notify + tokio)
-    -> AgentStateManager (event dedup + state tracking)
-      -> Tauri event bus
-        -> React useAgentEvents hook
-          -> OfficeState (Canvas 2D game engine)
-```
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| **Shell** | [Tauri v2](https://tauri.app/) |
-| **Backend** | Rust (tokio, notify, serde_json) |
-| **Frontend** | React 18 + TypeScript + Vite |
-| **Rendering** | Canvas 2D -- pixel-perfect at integer zoom levels |
-| **Search** | [CASS](search-backend/cass/) -- bundled as submodule |
-| **Tilesets** | 32x32px tiles from [SkyOffice](https://github.com/kevinshen56714/SkyOffice) |
+All credit for the original concept, design, and implementation goes to them. This repo exists purely because I wanted it running on my Windows machine and it took real effort to get there.
 
 ---
 
-## Installation (End-to-End)
+## My Original Problem
 
-Complete setup from a fresh machine to a running app.
+I cloned the original repo, got it to build... but the app launched with **no sessions and no agents visible**. The virtual room was empty. Nothing worked.
 
-### Step 0 -- System Prerequisites
+After digging in with Claude, we found the root cause was a chain of five separate issues — none of which had anything to do with my sessions not existing. They were all build and platform compatibility bugs that only surface on Windows.
 
-**macOS:**
-```bash
-xcode-select --install
-```
+---
 
-**Linux (Debian/Ubuntu):**
-```bash
-sudo apt update && sudo apt install -y \
-  build-essential curl wget git \
-  libwebkit2gtk-4.1-dev libgtk-3-dev libappindicator3-dev \
-  librsvg2-dev patchelf libssl-dev
-```
+## What Was Wrong (and What Was Fixed)
 
-**Linux (Fedora):**
-```bash
-sudo dnf install -y \
-  gcc gcc-c++ make curl wget git \
-  webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel \
-  librsvg2-devel openssl-devel
-```
+All fixes were diagnosed with [Claude Sonnet 4.6](https://claude.ai) during a live debugging session on 2026-03-16.
 
-### Step 1 -- Install Rust
+### Fix 1 — CASS binary was a Linux ELF, not a Windows executable
 
-Skip if `cargo --version` already works.
+The `search-backend/cass/target/release/cass` file committed in the original submodule was compiled on Linux. It cannot execute on Windows at all (`Exec format error`). The app was silently failing every time it tried to run CASS — so it returned zero sessions.
 
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source "$HOME/.cargo/env"
-rustc --version   # 1.85+ required (for Rust edition 2024)
-```
-
-### Step 2 -- Install Node.js
-
-Skip if `node --version` shows 18+.
-
-```bash
-# via nvm (recommended)
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.0/install.sh | bash
-source "$HOME/.nvm/nvm.sh"
-nvm install 22
-
-# or download directly from https://nodejs.org/
-```
-
-### Step 3 -- Clone with Submodules
-
-```bash
-git clone --recursive https://github.com/liuyixin-louis/agentroom.git
-cd agentroom
-```
-
-> Already cloned without `--recursive`? Run `git submodule update --init --recursive`
-
-### Step 4 -- Build the CASS Search Backend
-
-CASS indexes and searches your coding agent session histories. It compiles from source into a single binary.
-
-**Option A -- Automated install** (builds + adds to PATH):
-```bash
-./scripts/install-cass.sh
-source ~/.zshrc   # or: source ~/.bashrc
-```
-
-**Option B -- Manual build:**
-```bash
-cd search-backend/cass
+**Fix:** Build CASS natively for Windows:
+```powershell
+cd search-backend\cass
 cargo build --release
-# Binary: search-backend/cass/target/release/cass
-
-# Install to PATH (pick one):
-sudo cp target/release/cass /usr/local/bin/cass   # system-wide
-# or: export PATH="$(pwd)/target/release:$PATH"   # session-only
-cd ../..
+# produces: search-backend\cass\target\release\cass.exe
 ```
 
-**Option C -- System-wide install** (uses sudo):
-```bash
-./scripts/install-cass.sh --system
+### Fix 2 — `cass_bin()` used a hardcoded wrong path and ignored Windows `HOME`
+
+In `src-tauri/src/commands.rs`, the `cass_bin()` function resolved the CASS binary path using `env::var("HOME")` — which is not set in native Windows processes. The fallback path also pointed to a pre-submodule location (`~/Projects/AgentRoom/cass/...`) that no longer existed.
+
+**Fix:** Updated `cass_bin()` to:
+- Fall back to `USERPROFILE` when `HOME` is unset (Windows)
+- Append `.exe` on Windows via `#[cfg(windows)]`
+- Use a compile-time path constant emitted by `build.rs` pointing to the correct submodule binary location
+
+### Fix 3 — `frankentui` exposed Unix-only TTY backend on all platforms
+
+`ftui-tty::TtyBackend::open()` is correctly gated `#[cfg(unix)]` inside the `ftui-tty` crate. But `ftui-runtime/src/program.rs` wrapped it in a `Program::with_native_backend()` constructor gated only on `#[cfg(feature = "native-backend")]` — no Unix check. On Windows, the type existed but `open()` didn't, causing:
+
+```
+error[E0599]: no function or associated item named `open` found for struct `TtyBackend`
 ```
 
-Verify: `cass --version`
+**Fix:** Changed all `#[cfg(feature = "native-backend")]` items that touch TTY code to `#[cfg(all(unix, feature = "native-backend"))]` in:
+- `frankentui/crates/ftui-runtime/src/program.rs` (impl block, `run_native()`, its stub fallback, 3 test functions)
+- `frankentui/crates/ftui-runtime/src/lib.rs` (`TtyBackend` re-export)
 
-> The release build takes 3-8 minutes (LTO enabled). Subsequent builds are fast.
+### Fix 4 — CASS called `with_native_backend()` unconditionally
 
-### Step 5 -- Build the Search Index
+Even after Fix 3, CASS's own `run_tui_ftui()` function in `src/ui/app.rs` called `ftui::Program::with_native_backend()` directly with no platform guard — so it still failed on Windows.
 
-```bash
-cass index --full       # scans all agent session directories
-cass health --json      # verify index health
+**Fix:** Split the call with platform cfg:
+```rust
+#[cfg(unix)]
+let mut program = ftui::Program::with_native_backend(model, config)?;
+#[cfg(not(unix))]
+let mut program = ftui::Program::with_config(model, config)?; // crossterm-compat on Windows
 ```
 
-CASS auto-detects sessions from these agents:
+Both backends expose the same `run()` / `start_recording()` / `stop_recording()` API so no other changes were needed.
 
-| Agent | Session Path |
-|-------|-------------|
-| Claude Code | `~/.claude/projects/` |
-| Codex | `~/.codex/sessions/` |
-| Gemini CLI | `~/.gemini/tmp/` |
-| Cline | VS Code extension storage |
-| ChatGPT | `~/Library/Application Support/com.openai.chat/` |
-| Aider | `~/.aider.chat.history.md` |
-| Cursor | VS Code state SQLite files |
-| OpenCode | VS Code extension storage |
-| Pi-Agent | `~/.pi/agent/sessions/` |
-| Factory/Droid | `~/.factory/sessions/` |
-| Amp | Local Sourcegraph cache |
+### Fix 5 — Missing `icon.ico` for Windows resource file
 
-### Step 6 -- Run the App
+Tauri requires `icon.ico` to generate a Windows resource file during build. The original repo only had PNG icons.
 
-```bash
+**Fix:**
+```powershell
+npx tauri icon src-tauri/icons/128x128.png
+```
+
+### Fix 6 — CASS index was never built
+
+After all the above, the app launched but still showed no sessions. The final piece: CASS's `timeline` command only returns results from its index — it doesn't scan `.jsonl` files on demand. The index needs to be built once before sessions appear.
+
+**Fix:**
+```powershell
+.\search-backend\cass\target\release\cass.exe index --full
+```
+
+---
+
+## Quick Start (Windows 11)
+
+### Prerequisites
+
+- [Rust](https://rustup.rs) (install via rustup, use the MSVC toolchain)
+- [Node.js 18+](https://nodejs.org)
+- [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (required by Tauri on Windows)
+- [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) (usually pre-installed on Windows 11)
+
+### Build and Run
+
+```powershell
+# 1. Clone
+git clone https://github.com/NooRotic/agentroom-win.git
+cd agentroom-win
+
+# 2. Build the CASS search backend (run from PowerShell, not Git Bash)
+#    First time only — takes 3-8 minutes
+cd search-backend\cass
+cargo build --release
+cd ..\..
+
+# 3. Index your agent sessions (first time only)
+.\search-backend\cass\target\release\cass.exe index --full
+
+# 4. Install frontend deps and launch
 npm install
 npm run tauri dev
 ```
 
-The pixel office window opens within seconds. Active coding agents appear as animated characters at desks.
+### Verifying CASS works
 
-### Production Build
-
-```bash
-npm run tauri build
+```powershell
+.\search-backend\cass\target\release\cass.exe health --json
+.\search-backend\cass\target\release\cass.exe timeline --json --group-by none --since 90d
 ```
-
-Output: `src-tauri/target/release/bundle/` (`.app`/`.dmg` on macOS, `.deb`/`.AppImage` on Linux).
-
-### Troubleshooting
-
-| Problem | Fix |
-|---------|-----|
-| `cass: command not found` | Run `source ~/.zshrc` or open a new terminal |
-| `cargo build` linker errors | Install system prerequisites (Step 0) |
-| `git submodule update` fails | Ensure submodule repos are accessible (see note below) |
-| `cass index` finds 0 sessions | Install and use at least one coding agent first |
-| `npm run tauri dev` webkit errors | Install Tauri system deps (Step 0, Linux only) |
-| CASS build is slow | Normal for first build -- release mode with LTO takes 3-8 min |
-
-> **Note on submodule access:** The search backend submodules are hosted on GitHub. If they are private repos, you'll need SSH access configured. Public repos work with HTTPS out of the box.
 
 ---
 
-## Search Backend (CASS)
+## What This Repo Is (and Isn't)
 
-[CASS](https://github.com/Dicklesworthstone/coding_agent_session_search) (Coding Agent Session Search) is the search engine powering AgentRoom's session search. It's bundled as git submodules under `search-backend/`.
-
-### Architecture
-
-Sub-10ms interactive search across 11+ coding agent histories via a multi-layer search stack:
-
-| Layer | Latency | Technique |
-|-------|---------|-----------|
-| Prefix cache (LRU + Bloom) | <5ms | Hot-path cache hits |
-| Tantivy full-text (BM25) | 5-100ms | Inverted index + edge n-grams |
-| Semantic search (FastEmbed) | 100-1000ms | MiniLM-384 embeddings + HNSW |
-| Hybrid RRF fusion | 100-1500ms | Reciprocal Rank Fusion (K=60) |
-
-### Submodule Layout
-
-```
-search-backend/
-|-- cass/                       # Search engine + interactive TUI
-|-- asupersync/                 # Async runtime
-|-- frankentui/                 # Terminal UI framework
-|-- frankensearch/              # Lexical, semantic, and fusion search
-|-- franken_agent_detection/    # Agent auto-detection (11 connectors)
-+-- toon_rust/                  # Shared utilities
-```
-
-### CASS Usage
-
-```bash
-cass index --full                              # rebuild index
-cass search "auth error"                       # keyword search
-cass search "rate limiting" --mode hybrid      # lexical + semantic
-cass timeline --since 7d                       # recent activity
-cass tui                                       # interactive TUI
-cass health --json                             # index health check
-```
-
-For programmatic / AI agent integration (JSON output):
-```bash
-cass search "query" --json --limit 20 --highlight
-cass export "/path/to/session.jsonl" --format markdown
-```
-
-### Claude Code Skill (standalone)
-
-The repo includes a ready-to-use Claude Code skill that lets you search sessions from any Claude Code conversation — no desktop app needed.
-
-```bash
-# Install the skill (one-time)
-cp -r skills/searching-agent-sessions ~/.claude/skills/
-
-# Then in any Claude Code session, just ask:
-#   "find my session about authentication"
-#   "what did I discuss with gemini about rate limiting?"
-#   "show recent codex sessions"
-```
-
-The skill handles cross-agent search, workspace resolution, subagent deduplication, and outputs ready-to-paste resume commands. See [`skills/searching-agent-sessions/README.md`](skills/searching-agent-sessions/README.md) for details.
+- This is **my personal working build** on Windows 11 — not an official port, not endorsed by the original authors
+- The `search-backend/` code is vendored directly (not submodules) so the repo is fully self-contained
+- I made the minimum changes needed to get it working — nothing more
+- If the original agentroom or its dependencies ship Windows support upstream, use those instead
 
 ---
 
-## Project Structure
+## Original Projects
 
-```
-agentroom-visual/
-|-- src/                        # React frontend
-|   |-- office/                 # Game engine
-|   |   |-- engine/             # Renderer, characters, pathfinding
-|   |   |-- tilesets/           # TilesetManager, background gid map
-|   |   |-- sprites/            # Character sprite data
-|   |   +-- layout/             # Office layout serialization
-|   |-- components/             # UI panels (SearchBar, SessionList, etc.)
-|   |-- hooks/                  # useAgentEvents (core event bridge)
-|   |-- services/               # CASS client, tag service
-|   +-- bridge.ts               # Tauri invoke/listen bridge
-|-- src-tauri/                  # Rust backend
-|   +-- src/
-|       |-- file_watcher.rs     # JSONL file watching + initial scan
-|       |-- agent_state.rs      # Agent state machine + event emission
-|       |-- commands.rs         # Tauri commands (CASS, tags, layout)
-|       +-- transcript_parser.rs # JSONL line parsing
-|-- search-backend/             # CASS search engine (git submodules)
-|   |-- cass/                   # Main search binary + TUI
-|   |-- asupersync/             # Async runtime
-|   |-- frankentui/             # TUI framework
-|   |-- frankensearch/          # Lexical + semantic + fusion search
-|   |-- franken_agent_detection/ # Agent connector detection
-|   +-- toon_rust/              # Utilities
-|-- scripts/
-|   |-- build-cass.sh           # Build CASS from source
-|   +-- install-cass.sh         # Full install (build + PATH setup)
-|-- skills/
-|   +-- searching-agent-sessions/  # Claude Code skill (copy to ~/.claude/skills/)
-+-- public/assets/              # Tilesets, character sprites
+| Project | Author | Repo |
+|---------|--------|------|
+| AgentRoom | Yixin Liu | [liuyixin-louis/agentroom](https://github.com/liuyixin-louis/agentroom) |
+| CASS search backend | Jeffrey Emanuel | [Dicklesworthstone/coding_agent_session_search](https://github.com/Dicklesworthstone/coding_agent_session_search) |
+| frankentui | Jeffrey Emanuel | [Dicklesworthstone/frankentui](https://github.com/Dicklesworthstone/frankentui) |
+| frankensearch | Jeffrey Emanuel | [Dicklesworthstone/frankensearch](https://github.com/Dicklesworthstone/frankensearch) |
+
+All original licenses are preserved in their respective directories under `search-backend/`.
+
+---
+
+## Keeping Up With Upstream
+
+### App updates (`liuyixin-louis/agentroom`)
+
+The upstream remote is already configured in this repo. To pull app updates:
+
+```powershell
+git fetch upstream
+git merge upstream/main
+# README.md will conflict — keep yours, discard theirs
 ```
 
-## Acknowledgments
+### Backend updates (vendored `search-backend/`)
 
-**Search & Indexing:**
-- **[CASS](https://github.com/Dicklesworthstone/coding_agent_session_search)** by Jeffrey Emanuel -- unified search over local coding agent histories, plus the bundled [asupersync](https://github.com/Dicklesworthstone/asupersync), [frankensearch](https://github.com/Dicklesworthstone/frankensearch), [frankentui](https://github.com/Dicklesworthstone/frankentui), [franken_agent_detection](https://github.com/Dicklesworthstone/franken_agent_detection), and [toon_rust](https://github.com/Dicklesworthstone/toon_rust) libraries
-- **[Tantivy](https://github.com/quickwit-oss/tantivy)** -- full-text search engine (BM25 inverted index) powering CASS lexical search
-- **[FastEmbed](https://github.com/Anush008/fastembed-rs)** -- MiniLM-384 embeddings for semantic search
+The search backends are vendored as plain files. Use `git subtree pull` to bring in upstream changes when needed. Run these the **first time** to register each subtree, then use the pull command on subsequent updates:
 
-**Desktop & Framework:**
-- **[Tauri](https://tauri.app/)** -- desktop app shell with Rust backend and web frontend
-- **[iTerm2](https://iterm2.com/)** -- "Open in iTerm2" terminal integration via AppleScript
+```powershell
+# First time only — register each subtree
+git subtree add --prefix=search-backend/cass           https://github.com/liuyixin-louis/cass.git main --squash
+git subtree add --prefix=search-backend/frankentui     https://github.com/liuyixin-louis/frankentui.git main --squash
+git subtree add --prefix=search-backend/frankensearch  https://github.com/liuyixin-louis/frankensearch.git main --squash
+git subtree add --prefix=search-backend/franken_agent_detection https://github.com/liuyixin-louis/franken_agent_detection.git main --squash
+git subtree add --prefix=search-backend/asupersync     https://github.com/liuyixin-louis/asupersync.git main --squash
+git subtree add --prefix=search-backend/toon_rust      https://github.com/liuyixin-louis/toon_rust.git main --squash
 
-**Agent Integrations:**
-- **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** by Anthropic -- primary agent support
-- **[Codex CLI](https://github.com/openai/codex)** by OpenAI -- Codex agent session support
-- **[Gemini CLI](https://github.com/google-gemini/gemini-cli)** by Google -- Gemini agent session support
-- **[Aider](https://github.com/paul-gauthier/aider)** by Paul Gauthier -- Aider session support
-- **[Cline](https://github.com/cline/cline)** -- VS Code agent extension session support
-- **[CodexBar](https://github.com/steipete/CodexBar)** by Peter Steinberger -- macOS menu bar usage stats for Codex/Claude/Gemini (token panel integration)
+# Pull updates (run as needed per backend)
+git subtree pull --prefix=search-backend/cass           https://github.com/liuyixin-louis/cass.git main --squash
+git subtree pull --prefix=search-backend/frankentui     https://github.com/liuyixin-louis/frankentui.git main --squash
+git subtree pull --prefix=search-backend/frankensearch  https://github.com/liuyixin-louis/frankensearch.git main --squash
+git subtree pull --prefix=search-backend/franken_agent_detection https://github.com/liuyixin-louis/franken_agent_detection.git main --squash
+git subtree pull --prefix=search-backend/asupersync     https://github.com/liuyixin-louis/asupersync.git main --squash
+git subtree pull --prefix=search-backend/toon_rust      https://github.com/liuyixin-louis/toon_rust.git main --squash
+```
 
-**Visual Assets:**
-- **[Pixel Agents](https://github.com/pablodelucca/pixel-agents)** by Pablo de Lucca -- the original pixel art agent visualization (VS Code extension) from which the game engine is ported
-- **[SkyOffice](https://github.com/kevinshen56714/SkyOffice)** by Kevin Shen -- tileset assets (FloorAndGround, Modern_Office, Generic, Basement)
-- **[LimeZu](https://limezu.itch.io/)** -- pixel art assets used in SkyOffice's tilesets
-- **[JIK-A-4 (Metro City)](https://jik-a-4.itch.io/metrocity-free-topdown-character-pack)** -- character sprite base
+### After any backend update — re-check the two Windows fixes
 
-## License
+Upstream updates to `cass` or `frankentui` may overwrite the Windows compatibility patches. After pulling, verify these two files are still correct:
 
-[MIT](LICENSE)
+**`search-backend/cass/src/ui/app.rs`** — around the `run_tui_ftui()` function, should have:
+```rust
+#[cfg(unix)]
+let mut program = ftui::Program::with_native_backend(model, config)?;
+#[cfg(not(unix))]
+let mut program = ftui::Program::with_config(model, config)?;
+```
+
+**`search-backend/frankentui/crates/ftui-runtime/src/program.rs`** — the native-backend impl block should read:
+```rust
+#[cfg(all(unix, feature = "native-backend"))]
+impl<M: Model> Program<M, ftui_tty::TtyBackend, Stdout> {
+```
+
+If either was overwritten, re-apply the fix and commit. Both are small, well-understood changes.
+
+---
+
+## Features (from the original)
+
+- Real-time agent visualization with animated pixel art characters
+- Multi-agent support — Claude Code, Codex, and Gemini
+- Work & Break Room — active agents at desks, idle agents on couches
+- Session search powered by CASS (full-text + semantic)
+- Transcript viewer — read full conversations in-app
+- Sub-agent visualization — Task tool agents linked to their parent
+- AI-powered session tagging and categorization
+- Token usage dashboard
