@@ -541,6 +541,45 @@ export function renderRotateButton(
   return { cx, cy, radius }
 }
 
+// ── Agent type indicators ────────────────────────────────────────
+
+/** Brand color per agent type — shown as a small dot below each character */
+const AGENT_TYPE_COLORS: Record<string, string> = {
+  'claude-code': '#D97941', // Anthropic orange
+  'gemini':      '#4B8DF8', // Google blue
+  'codex':       '#10A37F', // OpenAI teal
+}
+
+/**
+ * Draw a small colored dot below each character's feet indicating agent type.
+ * Always visible (not just on hover) so you can tell types apart at a glance.
+ */
+export function renderAgentTypeIndicators(
+  ctx: CanvasRenderingContext2D,
+  characters: Character[],
+  offsetX: number,
+  offsetY: number,
+  zoom: number,
+): void {
+  const dotR = Math.max(2, Math.round(2.5 * zoom))
+  for (const ch of characters) {
+    if (ch.isSubagent) continue
+    if (ch.matrixEffect) continue
+    const color = ch.agentType ? (AGENT_TYPE_COLORS[ch.agentType] ?? null) : null
+    if (!color) continue
+    const sittingOffset = ch.state === CharacterState.TYPE ? CHARACTER_SITTING_OFFSET_PX : 0
+    const cx = Math.round(offsetX + ch.x * zoom)
+    const cy = Math.round(offsetY + (ch.y + sittingOffset) * zoom) + dotR + 1
+    ctx.save()
+    ctx.beginPath()
+    ctx.arc(cx, cy, dotR, 0, Math.PI * 2)
+    ctx.fillStyle = color
+    ctx.globalAlpha = 0.9
+    ctx.fill()
+    ctx.restore()
+  }
+}
+
 // ── Speech bubbles ──────────────────────────────────────────────
 
 export function renderBubbles(
@@ -680,6 +719,9 @@ export function renderFrame(
 
   // Speech bubbles (always on top of characters)
   renderBubbles(ctx, characters, offsetX, offsetY, zoom)
+
+  // Agent-type color dots (below feet, on top of sprites)
+  renderAgentTypeIndicators(ctx, characters, offsetX, offsetY, zoom)
 
   // Room name labels (rendered on top of everything)
   renderRoomLabels(ctx, offsetX, offsetY, zoom)

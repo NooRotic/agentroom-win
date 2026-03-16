@@ -138,6 +138,53 @@ html, body, #root {
   background: var(--ui-bg-card);
 }
 
+/* ── Watch mode indicator ── */
+.watch-mode-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--ui-border);
+  font-family: var(--ui-font);
+  font-size: 11px;
+  min-height: 28px;
+}
+
+.watch-mode-label {
+  color: var(--ui-text-dim);
+  flex-shrink: 0;
+}
+
+.watch-mode-value {
+  color: var(--ui-text);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+
+.watch-mode-value.watch-mode-all {
+  color: var(--ui-accent);
+}
+
+.watch-mode-reset {
+  background: none;
+  border: none;
+  color: var(--ui-text-dim);
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 14px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.watch-mode-reset:hover {
+  color: var(--ui-text);
+  background: var(--ui-bg-card);
+}
+
 /* ════════════════════════════════════════════
    CONTROL PANEL LAYER (clean modern UI)
    ════════════════════════════════════════════ */
