@@ -83,6 +83,19 @@ Tauri requires `icon.ico` to generate a Windows resource file during build. The 
 npx tauri icon src-tauri/icons/128x128.png
 ```
 
+### Fix 7 — File watcher only tracked the single most-recently-modified project
+
+The original `find_claude_project_dir("")` (no workspace specified) scanned `~/.claude/projects/` but kept only the **one subdirectory** with the newest `.jsonl` file. All other projects were invisible to the live watcher — agents from other workspaces never appeared or updated.
+
+**Fix:** Changed `find_claude_project_dir("")` to return the `~/.claude/projects/` root itself. `start_watching` now detects this "watch-all" mode and:
+- Runs an initial `scan_all_projects()` that iterates every project subdir
+- Starts the `notify` filesystem watcher with `RecursiveMode::Recursive` on the root (catches new `.jsonl` files in any project)
+- Uses the same all-projects scan in the 1-second polling fallback loop
+
+Agents from every workspace now show up in the office simultaneously.
+
+---
+
 ### Fix 6 — CASS index was never built
 
 After all the above, the app launched but still showed no sessions. The final piece: CASS's `timeline` command only returns results from its index — it doesn't scan `.jsonl` files on demand. The index needs to be built once before sessions appear.
@@ -215,6 +228,7 @@ If either was overwritten, re-apply the fix and commit. Both are small, well-und
 
 - Real-time agent visualization with animated pixel art characters
 - Multi-agent support — Claude Code, Codex, and Gemini
+- All-workspace monitoring — watches every project under `~/.claude/projects/` simultaneously (Windows fix)
 - Work & Break Room — active agents at desks, idle agents on couches
 - Session search powered by CASS (full-text + semantic)
 - Transcript viewer — read full conversations in-app

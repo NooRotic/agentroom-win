@@ -66,21 +66,37 @@ fn agent_id_from_path(path: &Path) -> String {
 }
 
 /// Infer agent type from JSONL file path.
+/// Uses component-based matching so it works on both Windows (backslash) and Unix (slash).
 fn agent_type_from_path(path: &Path) -> Option<String> {
-    let s = path.to_string_lossy();
-    if s.contains("/.claude/") {
-        Some("claude-code".to_string())
-    } else if s.contains("/.gemini/") {
-        Some("gemini".to_string())
-    } else if s.contains("/.codex/") {
-        Some("codex".to_string())
-    } else {
-        None
+    for component in path.components() {
+        match component.as_os_str().to_string_lossy().as_ref() {
+            ".claude" => return Some("claude-code".to_string()),
+            ".gemini" => return Some("gemini".to_string()),
+            ".codex"  => return Some("codex".to_string()),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Scan all project subdirectories under the ~/.claude/projects root.
+fn scan_all_projects(root: &Path, shared: &Arc<Mutex<WatcherState>>) {
+    let entries = match fs::read_dir(root) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            scan_and_process(&path, shared);
+        }
     }
 }
 
 /// Find the Claude Code project directory for a given workspace path.
 /// Claude Code stores sessions at ~/.claude/projects/<hash>/
+/// When project_dir is empty, returns the ~/.claude/projects root so all
+/// projects can be watched together.
 fn find_claude_project_dir(project_dir: &str) -> Option<PathBuf> {
     // On Windows, HOME is often unset — fall back to USERPROFILE.
     let home = std::env::var("HOME")
@@ -92,39 +108,9 @@ fn find_claude_project_dir(project_dir: &str) -> Option<PathBuf> {
         return None;
     }
 
-    // If project_dir is empty, try to find any active project
+    // If project_dir is empty, return the root so the caller watches all projects.
     if project_dir.is_empty() {
-        // Scan all project directories for recent .jsonl files
-        if let Ok(entries) = fs::read_dir(&claude_dir) {
-            let mut best_dir: Option<(PathBuf, std::time::SystemTime)> = None;
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if !path.is_dir() {
-                    continue;
-                }
-                // Check for recent .jsonl files
-                if let Ok(jsonl_entries) = fs::read_dir(&path) {
-                    for jentry in jsonl_entries.flatten() {
-                        let jpath = jentry.path();
-                        if jpath.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-                            if let Ok(meta) = jpath.metadata() {
-                                if let Ok(modified) = meta.modified() {
-                                    if best_dir
-                                        .as_ref()
-                                        .map(|(_, t)| modified > *t)
-                                        .unwrap_or(true)
-                                    {
-                                        best_dir = Some((path.clone(), modified));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            return best_dir.map(|(p, _)| p);
-        }
-        return None;
+        return Some(claude_dir);
     }
 
     // Compute the project hash (same as Claude Code):
@@ -318,12 +304,20 @@ pub fn start_watching(
         *guard = Some(Arc::clone(&cancel));
     }
 
+    // When project_dir is empty, watch_dir is the ~/.claude/projects root —
+    // scan all subdirs. Otherwise it's a single project dir.
+    let watch_all = project_dir.is_empty();
+
     // Initial scan: suppress event emissions, then emit "discovered" per agent
     {
         let mut state = shared.lock().unwrap();
         state.state_manager.suppress_emit = true;
     }
-    scan_and_process(&watch_dir, &shared);
+    if watch_all {
+        scan_all_projects(&watch_dir, &shared);
+    } else {
+        scan_and_process(&watch_dir, &shared);
+    }
     {
         let mut state = shared.lock().unwrap();
         state.state_manager.suppress_emit = false;
@@ -334,6 +328,12 @@ pub fn start_watching(
     let shared_notify = Arc::clone(&shared);
     let cancel_notify = Arc::clone(&cancel);
     let watch_dir_notify = watch_dir.clone();
+    // Use Recursive when watching the root (catches files in all project subdirs)
+    let recursive_mode = if watch_all {
+        RecursiveMode::Recursive
+    } else {
+        RecursiveMode::NonRecursive
+    };
     let mut watcher = RecommendedWatcher::new(
         move |result: Result<Event, notify::Error>| {
             if cancel_notify.load(Ordering::Relaxed) {
@@ -355,7 +355,7 @@ pub fn start_watching(
     .map_err(|e| format!("Failed to create watcher: {}", e))?;
 
     watcher
-        .watch(&watch_dir_notify, RecursiveMode::NonRecursive)
+        .watch(&watch_dir_notify, recursive_mode)
         .map_err(|e| format!("Failed to start watching: {}", e))?;
 
     // Spawn background tasks:
@@ -378,7 +378,11 @@ pub fn start_watching(
             if cancel_poll.load(Ordering::Relaxed) {
                 break;
             }
-            scan_and_process(&watch_dir_poll, &shared_poll);
+            if watch_all {
+                scan_all_projects(&watch_dir_poll, &shared_poll);
+            } else {
+                scan_and_process(&watch_dir_poll, &shared_poll);
+            }
         }
     });
 

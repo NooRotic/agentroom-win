@@ -288,6 +288,25 @@ function App() {
           </button>
         </div>
 
+        {/* Watch Mode Indicator */}
+        <div className="watch-mode-bar">
+          <span className="watch-mode-label">Watching:</span>
+          {focusedProject === null ? (
+            <span className="watch-mode-value watch-mode-all">All Projects</span>
+          ) : (
+            <>
+              <span className="watch-mode-value">{projectBasename(focusedProject)}</span>
+              <button
+                className="watch-mode-reset"
+                title="Switch back to watching all projects"
+                onClick={() => handleFocusProject(null)}
+              >
+                ×
+              </button>
+            </>
+          )}
+        </div>
+
         <SearchBar
           onSearch={handleSearch}
           categories={categories}
