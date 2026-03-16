@@ -21,3 +21,6 @@ search-backend/*/target/
 # Generated local state
 coverage/
 nanobanana-output/
+
+# Claude Code local settings
+.claude/settings.local.json
