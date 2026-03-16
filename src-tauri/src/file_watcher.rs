@@ -82,7 +82,10 @@ fn agent_type_from_path(path: &Path) -> Option<String> {
 /// Find the Claude Code project directory for a given workspace path.
 /// Claude Code stores sessions at ~/.claude/projects/<hash>/
 fn find_claude_project_dir(project_dir: &str) -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
+    // On Windows, HOME is often unset — fall back to USERPROFILE.
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()?;
     let claude_dir = PathBuf::from(&home).join(".claude").join("projects");
 
     if !claude_dir.exists() {

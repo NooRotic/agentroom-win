@@ -13,7 +13,7 @@ import { SessionList } from './components/SessionList.js'
 import { SessionPanel } from './components/SessionPanel.js'
 import { StatusBar } from './components/StatusBar.js'
 import { TokenPanel } from './components/TokenPanel.js'
-import { listAllSessions, searchSessions } from './services/cass.js'
+import { listAllSessions, searchSessions, indexSessions } from './services/cass.js'
 import { getAllCategories, loadAllTags } from './services/tags.js'
 import type { Session, SessionTag } from './types.js'
 
@@ -92,6 +92,15 @@ function App() {
   useEffect(() => {
     loadSessions('all')
   }, [loadSessions])
+
+  // Auto-index + reload sessions every 2 minutes so new sessions appear without manual reindex
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      await indexSessions()
+      loadSessions(agentFilter)
+    }, 2 * 60 * 1000)
+    return () => clearInterval(interval)
+  }, [loadSessions, agentFilter])
 
   // Load assets + default layout on mount
   useEffect(() => {
@@ -373,7 +382,7 @@ function App() {
       )}
 
       {/* Bottom: Status Bar */}
-      <StatusBar sessions={displayedSessions} tags={tags} onTagUpdate={handleTagUpdate} />
+      <StatusBar sessions={displayedSessions} tags={tags} onTagUpdate={handleTagUpdate} onReindex={() => loadSessions(agentFilter)} />
     </div>
   )
 }

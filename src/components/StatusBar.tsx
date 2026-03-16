@@ -7,13 +7,14 @@ interface Props {
   sessions: Session[];
   tags: Record<string, SessionTag>;
   onTagUpdate: (tag: SessionTag) => void;
+  onReindex?: () => void;
 }
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export function StatusBar({ sessions, tags, onTagUpdate }: Props) {
+export function StatusBar({ sessions, tags, onTagUpdate, onReindex }: Props) {
   const [healthy, setHealthy] = useState<boolean | null>(null);
   const [indexing, setIndexing] = useState(false);
   const [tagging, setTagging] = useState(false);
@@ -33,6 +34,7 @@ export function StatusBar({ sessions, tags, onTagUpdate }: Props) {
     setIndexing(false);
     const h = await getHealth();
     setHealthy(h.healthy);
+    onReindex?.();
   };
 
   const handleTagAll = async () => {
