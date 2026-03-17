@@ -24,3 +24,6 @@ nanobanana-output/
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Local-only docs (not for public repo)
+docs/social_media.md
